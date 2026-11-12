@@ -1,58 +1,79 @@
-import { parseLevel, initState, slide, solve, DX, DY, WALL, SPIKE } from './engine.js';
+import { CAP, isComplete, isDone, canPour, solve, hasUsefulMove } from './engine.js';
 import { LEVELS } from './levels.js';
+import { DRINKS, DRINK_EVERY, drinkSVG } from './drinks.js';
 
-const WORLDS = [
-  { name: 'Primeros pasos', color: '#5ec8ff', tip: 'Desliza el dedo: te mueves hasta chocar. Llega a la salida.' },
-  { name: 'Gemas', color: '#ffd24a', tip: 'Recoge todas las gemas para abrir la salida.' },
-  { name: 'Pinchos', color: '#ff6b6b', tip: 'Cuidado con los pinchos: si los tocas, pierdes el movimiento.' },
-  { name: 'Portales', color: '#b388ff', tip: 'Los portales te llevan a su pareja sin frenarte.' },
-  { name: 'Bloques frágiles', color: '#ffa94d', tip: 'Los bloques agrietados te frenan una vez y se rompen.' },
-  { name: 'Flechas', color: '#4dd6a8', tip: 'Las flechas cambian tu dirección al pasar por encima.' },
-  { name: 'El gran final', color: '#ff7ad9', tip: 'Todo junto. Piensa antes de deslizar.' },
-];
-const PER_WORLD = 10;
+const COLORS = ['#ff6b8b', '#ff9838', '#ffd43b', '#a6d94a', '#33b679', '#35c9d6', '#4a8dff', '#5a55d6', '#c39bff', '#d94bc0', '#a9744f', '#7b2242'];
+const HIDDEN = '#ddd3e8';
+const TYPE_NAME = { n: '', m: 'misterio', r: 'reto' };
+const TIPS = {
+  first: 'Toca una botella y después otra para verter. Deja cada color en su botella.',
+  m: 'Misterio: los colores ocultos se descubren al quedar arriba.',
+  r: 'Reto: solo hay una botella libre.',
+};
+const CHEERS = ['¡Perfecto!', '¡Qué arte!', '¡Brillante!', '¡Chin-chin!', '¡Precioso!', '¡Así se hace!'];
 const $ = (id) => document.getElementById(id);
 
 // ---------- Guardado ----------
-const KEY = 'desliza.v1';
-let save = { stars: {}, sound: true };
+const KEY = 'mimosa.v1';
+const save = { done: {}, sound: true };
 try { Object.assign(save, JSON.parse(localStorage.getItem(KEY)) || {}); } catch { /* sin guardado */ }
 const persist = () => { try { localStorage.setItem(KEY, JSON.stringify(save)); } catch { /* modo privado */ } };
-const starsOf = (i) => save.stars[i] || 0;
-const unlocked = (i) => i === 0 || starsOf(i - 1) > 0;
-const totalStars = () => LEVELS.reduce((a, _, i) => a + starsOf(i), 0);
-const firstPending = () => LEVELS.findIndex((_, i) => !starsOf(i));
+const isDoneLevel = (i) => save.done[i] > 0;
+const unlocked = (i) => i === 0 || isDoneLevel(i - 1);
+const doneCount = () => LEVELS.reduce((a, _, i) => a + (isDoneLevel(i) ? 1 : 0), 0);
+const firstPending = () => LEVELS.findIndex((_, i) => !isDoneLevel(i));
+const drinkUnlocked = (d) => isDoneLevel((d + 1) * DRINK_EVERY - 1);
+const drinksCount = () => DRINKS.reduce((a, _, d) => a + (drinkUnlocked(d) ? 1 : 0), 0);
 
 // ---------- Sonido ----------
-let ac = null;
+let ac = null, noise = null;
 function unlockAudio() {
   if (!ac) {
     const AC = window.AudioContext || window.webkitAudioContext;
-    if (AC) ac = new AC();
+    if (!AC) return;
+    ac = new AC();
+    noise = ac.createBuffer(1, ac.sampleRate, ac.sampleRate);
+    const d = noise.getChannelData(0);
+    for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
   }
-  if (ac && ac.state === 'suspended') ac.resume();
+  if (ac.state === 'suspended') ac.resume();
 }
-function tone(freq, dur, { type = 'sine', vol = 0.12, to = 0, delay = 0 } = {}) {
+function tone(freq, dur, { type = 'sine', vol = 0.1, to = 0, delay = 0 } = {}) {
   if (!ac || !save.sound) return;
   const t = ac.currentTime + delay;
   const o = ac.createOscillator(), g = ac.createGain();
   o.type = type;
   o.frequency.setValueAtTime(freq, t);
   if (to) o.frequency.exponentialRampToValueAtTime(to, t + dur);
-  g.gain.setValueAtTime(vol, t);
+  g.gain.setValueAtTime(0.0001, t);
+  g.gain.exponentialRampToValueAtTime(vol, t + 0.012);
   g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
   o.connect(g).connect(ac.destination);
   o.start(t);
-  o.stop(t + dur + 0.02);
+  o.stop(t + dur + 0.03);
 }
 const sfx = {
-  bump: () => tone(150, 0.09, { type: 'triangle', vol: 0.18, to: 70 }),
-  gem: (n) => tone(660 * 2 ** (n / 6), 0.18, { vol: 0.14 }),
-  portal: () => tone(300, 0.2, { type: 'sawtooth', vol: 0.05, to: 1200 }),
-  crack: () => { tone(220, 0.12, { type: 'square', vol: 0.07, to: 60 }); tone(90, 0.15, { type: 'triangle', vol: 0.15 }); },
-  die: () => tone(420, 0.35, { type: 'sawtooth', vol: 0.08, to: 60 }),
-  win: () => [523, 659, 784, 1047].forEach((f, i) => tone(f, 0.25, { vol: 0.12, delay: i * 0.09 })),
-  tap: () => tone(520, 0.05, { vol: 0.06 }),
+  pick: () => tone(620, 0.09, { vol: 0.07, to: 880 }),
+  drop: () => tone(520, 0.08, { vol: 0.05, to: 380 }),
+  no: () => tone(190, 0.1, { type: 'triangle', vol: 0.1, to: 150 }),
+  tap: () => tone(700, 0.05, { vol: 0.05 }),
+  pour(dur) { // ruido filtrado que sube de tono, como un vaso llenándose
+    if (!ac || !save.sound) return;
+    const t = ac.currentTime;
+    const src = ac.createBufferSource(), f = ac.createBiquadFilter(), g = ac.createGain();
+    src.buffer = noise; src.loop = true;
+    f.type = 'bandpass'; f.Q.value = 2.5;
+    f.frequency.setValueAtTime(500, t);
+    f.frequency.exponentialRampToValueAtTime(1500, t + dur);
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.exponentialRampToValueAtTime(0.09, t + 0.04);
+    g.gain.setValueAtTime(0.09, t + dur - 0.05);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + dur + 0.04);
+    src.connect(f).connect(g).connect(ac.destination);
+    src.start(t); src.stop(t + dur + 0.06);
+  },
+  done: () => [784, 1047, 1319].forEach((f, i) => tone(f, 0.22, { vol: 0.08, delay: i * 0.06 })),
+  win: () => [523, 659, 784, 1047, 1319].forEach((f, i) => tone(f, 0.36, { vol: 0.09, delay: 0.12 + i * 0.09 })),
 };
 
 // ---------- Pantallas ----------
@@ -62,250 +83,262 @@ function show(name) {
   for (const s of document.querySelectorAll('.screen')) s.classList.toggle('active', s.id === name);
   if (name === 'home') renderHome();
   if (name === 'levels') renderLevels();
+  if (name === 'menu') renderMenu();
   if (name === 'game') { resize(); if (!running) { running = true; last = 0; requestAnimationFrame(frame); } }
 }
 
 function renderHome() {
-  const pending = firstPending();
-  $('btn-play').textContent = pending === 0 ? 'Jugar' : pending < 0 ? 'Elegir nivel' : `Continuar · Día ${dayOf(pending)}`;
-  $('home-progress').textContent = `★ ${totalStars()} / ${LEVELS.length * 3}`;
+  const pending = firstPending(), n = doneCount();
+  $('btn-play').textContent = pending < 0 ? 'Volver a jugar' : n === 0 ? 'Jugar' : `Nivel ${pending + 1}`;
+  $('home-bar').style.width = `${(n / LEVELS.length) * 100}%`;
+  $('home-progress').textContent = `${n} de ${LEVELS.length} niveles · ${drinksCount()} de ${DRINKS.length} bebidas`;
   $('btn-sound').textContent = `Sonido: ${save.sound ? 'sí' : 'no'}`;
 }
 
-const dayOf = (i) => Math.floor(i / PER_WORLD) + 1;
-
 function renderLevels() {
-  $('lv-stars').textContent = `★ ${totalStars()}`;
+  $('lv-count').textContent = `${doneCount()}/${LEVELS.length}`;
   const list = $('lv-list');
   list.textContent = '';
   const pending = firstPending();
-  WORLDS.forEach((w, wi) => {
-    const box = document.createElement('div');
-    box.className = 'world';
-    box.style.setProperty('--c', w.color);
-    const h = document.createElement('h3');
-    const got = LEVELS.slice(wi * PER_WORLD, (wi + 1) * PER_WORLD).reduce((a, _, k) => a + starsOf(wi * PER_WORLD + k), 0);
-    h.innerHTML = `<b><span class="day">Día ${wi + 1}</span> · ${w.name}</b><span>★ ${got}/${PER_WORLD * 3}</span>`;
-    h.querySelector('.day').style.cssText = 'color:var(--c);font-size:inherit';
-    const grid = document.createElement('div');
-    grid.className = 'grid';
-    for (let k = 0; k < PER_WORLD; k++) {
-      const i = wi * PER_WORLD + k;
-      const b = document.createElement('button');
-      const s = starsOf(i);
-      b.className = 'lv' + (s ? ' done' : '') + (i === pending ? ' next' : '');
-      b.disabled = !unlocked(i);
-      b.innerHTML = `${k + 1}<small>${'★'.repeat(s)}</small>`;
-      b.onclick = () => { sfx.tap(); startLevel(i); };
-      grid.appendChild(b);
-    }
-    box.append(h, grid);
-    list.appendChild(box);
-    if (wi === Math.floor(Math.max(pending, 0) / PER_WORLD)) requestAnimationFrame(() => box.scrollIntoView({ block: 'center' }));
+  LEVELS.forEach((lv, i) => {
+    const b = document.createElement('button');
+    b.className = 'lv' + (isDoneLevel(i) ? ' done' : '') + (i === pending ? ' next' : '');
+    b.disabled = !unlocked(i);
+    b.innerHTML = `${i + 1}<small>${TYPE_NAME[lv.t]}</small>`;
+    b.onclick = () => { sfx.tap(); startLevel(i); };
+    list.appendChild(b);
+    if (i === pending) requestAnimationFrame(() => b.scrollIntoView({ block: 'center' }));
   });
+}
+
+function renderMenu() {
+  $('menu-count').textContent = `${drinksCount()}/${DRINKS.length}`;
+  $('menu-list').innerHTML = DRINKS.map((d, i) => {
+    const ok = drinkUnlocked(i);
+    return `<div class="drink${ok ? '' : ' locked'}">${drinkSVG(d, !ok)}<strong>${ok ? d.name : '???'}</strong><small>${ok ? 'Conseguida' : `Nivel ${(i + 1) * DRINK_EVERY}`}</small></div>`;
+  }).join('');
 }
 
 // ---------- Estado de la partida ----------
 const cv = $('cv');
 const ctx = cv.getContext('2d');
-let cur = 0, P = null, state = null, history = [], moves = 0, usedHint = false;
-let vis = { gems: 0, blocks: 0 };      // lo que se ve (va por detrás de la lógica al animar)
-let px = 0, py = 0, face = 2;          // posición visual del jugador (en casillas)
-let anim = null, queued = -1, busy = false;
-let squash = 0, squashDir = 0, shake = 0, dead = 0, hint = null, gemCount = 0;
-let particles = [];
-let cs = 40, ox = 0, oy = 0, vw = 0, vh = 0, T = 0, last = 0;
-let accent = '#5ec8ff';
+let cur = 0, bottles = [], hid = [], view = [], sel = -1, moves = 0, history = [], extraUsed = false, won = false;
+let pours = [], particles = [], hint = null;
+let vw = 0, vh = 0, W = 40, UH = 32, H = 150, T = 0, last = 0;
 
 function startLevel(i) {
   cur = i;
-  P = parseLevel(LEVELS[i]);
-  accent = WORLDS[Math.floor(i / PER_WORLD)].color;
-  const k = i % PER_WORLD;
-  $('g-title').textContent = `Día ${dayOf(i)} · Nivel ${k + 1}`;
-  $('g-tip').textContent = k === 0 ? WORLDS[Math.floor(i / PER_WORLD)].tip : '';
+  const lv = LEVELS[i];
+  $('g-title').textContent = `Nivel ${i + 1}`;
+  $('g-tip').textContent = i === 0 ? TIPS.first : TIPS[lv.t] || '';
   $('win').classList.add('hidden');
-  resetLevel();
-  show('game');
-}
-
-function resetLevel() {
-  state = initState(P);
-  history = [];
-  moves = 0;
-  usedHint = false;
-  anim = null; queued = -1; busy = false; dead = 0; hint = null; gemCount = 0;
-  particles = [];
-  syncVisual();
+  bottles = lv.b.map((s) => [...s].map((ch) => parseInt(ch, 12)));
+  hid = bottles.map((b) => b.map((_, j) => lv.t === 'm' && j < b.length - 1));
+  view = bottles.map(() => ({ x: 0, y: 0, lift: 0, busy: false, nudge: 0, doneT: -9 }));
+  sel = -1; moves = 0; history = []; extraUsed = false; won = false;
+  pours = []; particles = []; hint = null;
   updateHud();
+  show('game');
+  layout();
 }
-
-function syncVisual() {
-  vis = { gems: state.gems, blocks: state.blocks };
-  px = state.pos % P.w;
-  py = Math.floor(state.pos / P.w);
-  gemCount = bits(state.gems);
-}
-const bits = (m) => { let c = 0; for (; m; m &= m - 1) c++; return c; };
 
 function updateHud() {
-  $('g-moves').textContent = `${moves} / ${P.par}`;
-  $('g-undo').disabled = !history.length;
+  $('g-moves').textContent = moves ? `${moves}` : '';
+  $('g-undo').disabled = !history.length || won;
+  $('g-extra').disabled = extraUsed || won;
+  $('g-hint').disabled = won;
 }
 
-function input(dir) {
-  if (screen !== 'game' || !$('win').classList.contains('hidden')) return;
-  if (busy) return;
-  if (anim) { queued = dir; return; }
-  const r = slide(P, state, dir);
-  face = dir;
+const units = (i) => bottles[i].map((c, j) => ({ c, hid: hid[i][j], amt: 1 }));
+
+function visibleRun(i) { // cuántas unidades se vierten: las de arriba del mismo color y a la vista
+  const b = bottles[i];
+  if (!b.length) return 0;
+  let n = 1;
+  while (n < b.length && b[b.length - 1 - n] === b[b.length - 1] && !hid[i][b.length - 1 - n]) n++;
+  return n;
+}
+
+function tap(i) {
+  if (won || view[i].busy) return;
+  const b = bottles[i];
   hint = null;
-  if (!r.moved) { squash = 1; squashDir = dir; sfx.bump(); return; }
-  history.push({ s: state, moves });
-  state = r.state;
+  if (sel < 0) {
+    if (!b.length || isComplete(b)) { view[i].nudge = 1; sfx.no(); return; }
+    sel = i; sfx.pick();
+    return;
+  }
+  if (sel === i) { sel = -1; sfx.drop(); return; }
+  if (canPour(bottles[sel], b)) { pour(sel, i); return; }
+  if (b.length && !isComplete(b)) { sel = i; sfx.pick(); } else { view[i].nudge = 1; sfx.no(); }
+}
+
+function pour(a, b) {
+  const A = bottles[a], B = bottles[b];
+  const c = A[A.length - 1];
+  const k = Math.min(visibleRun(a), CAP - B.length);
+  history.push({ bottles: bottles.map((x) => x.slice()), hid: hid.map((x) => x.slice()), moves });
+  const fromA = units(a), fromB = units(b);
+  for (let q = 0; q < k; q++) { A.pop(); hid[a].pop(); B.push(c); hid[b].push(false); }
+  if (A.length) hid[a][A.length - 1] = false; // se descubre lo que queda arriba
   moves++;
+  sel = -1;
+  view[a].busy = view[b].busy = true;
+  pours.push({ a, b, k, c, fromA, fromB, u0: fromA.length, s: view[b].x < vw / 2 ? -1 : 1, t: 0, T1: 0.2, T2: 0.2 + 0.1 * k, T3: 0.2, started: false, landed: false });
+  if (cur === 0 || $('g-tip').textContent.startsWith('No quedan')) $('g-tip').textContent = cur === 0 ? TIPS.first : '';
   updateHud();
-  anim = { steps: r.steps, i: 0, p: 0, fx: px, fy: py, result: r.result };
 }
 
 function undo() {
-  if (busy || !history.length) return;
+  if (won || !history.length) return;
   const h = history.pop();
-  state = h.s; moves = h.moves;
-  anim = null; queued = -1; hint = null;
-  syncVisual(); updateHud();
+  const extra = bottles.length - h.bottles.length; // la botella extra se conserva
+  bottles = h.bottles; hid = h.hid; moves = h.moves;
+  for (let q = 0; q < extra; q++) { bottles.push([]); hid.push([]); }
+  pours = []; sel = -1; hint = null;
+  for (const v of view) { v.busy = false; v.doneT = -9; }
+  updateHud();
+}
+
+function addBottle() {
+  if (extraUsed || won) return;
+  extraUsed = true;
+  bottles.push([]); hid.push([]);
+  view.push({ x: 0, y: 0, lift: 0, busy: false, nudge: 0, doneT: -9 });
+  pours = []; for (const v of view) v.busy = false;
+  layout();
+  const v = view[view.length - 1];
+  sparkle(v.x, v.y + H / 2, '#ff9ab5', 14);
+  sfx.done();
+  $('g-tip').textContent = '';
+  updateHud();
 }
 
 function showHint() {
-  if (busy || anim) return;
-  const sol = solve(P, state);
-  if (!sol) { $('g-tip').textContent = 'Desde aquí no hay salida: deshaz o reinicia.'; return; }
-  usedHint = true;
-  hint = { dir: sol.dirs[0], t: 0 };
+  if (won || pours.length) return;
+  const sol = solve(bottles, 30000);
+  if (!sol || !sol.moves.length) { $('g-tip').textContent = 'Desde aquí no veo salida: deshaz o añade una botella.'; sfx.no(); return; }
+  const [from, to] = sol.moves[0];
+  sel = from;
+  hint = { to, t: 0 };
+  sfx.pick();
 }
 
-// ---------- Animación ----------
-const SPEED = 26; // casillas por segundo
-
-function cellXY(i) { return [i % P.w, Math.floor(i / P.w)]; }
-
-function burst(cx, cy, color, n = 10, power = 1) {
-  for (let k = 0; k < n; k++) {
-    const a = Math.random() * Math.PI * 2, v = (1.5 + Math.random() * 4) * power;
-    particles.push({ x: cx, y: cy, vx: Math.cos(a) * v, vy: Math.sin(a) * v, life: 1, color, r: 0.05 + Math.random() * 0.07 });
+function landed(p) {
+  view[p.b].busy = false;
+  if (isComplete(bottles[p.b])) {
+    view[p.b].doneT = T;
+    sparkle(view[p.b].x, view[p.b].y + H * 0.3, COLORS[p.c], 16);
+    sfx.done();
   }
-}
-
-function arrive(st) {
-  const [x, y] = cellXY(st.at);
-  if (st.gem !== undefined) {
-    vis.gems |= 1 << st.gem;
-    sfx.gem(gemCount++);
-    burst(x + 0.5, y + 0.5, '#ffd24a', 12);
-  }
-  if (P.arrowAt[st.at] >= 0) face = P.arrowAt[st.at];
-}
-
-function update(dt) {
-  T += dt;
-  squash = Math.max(0, squash - dt * 7);
-  shake = Math.max(0, shake - dt * 3);
-  if (hint) { hint.t += dt; if (hint.t > 4) hint = null; }
-  for (const q of particles) { q.x += q.vx * dt; q.y += q.vy * dt; q.vx *= 0.92; q.vy *= 0.92; q.life -= dt * 1.8; }
-  particles = particles.filter((q) => q.life > 0);
-
-  if (dead > 0) {
-    dead -= dt;
-    if (dead <= 0) { // tras morir se vuelve a la posición anterior (el movimiento cuenta)
-      const h = history.pop();
-      state = h.s;
-      syncVisual();
-      busy = false; dead = 0;
-    }
-    return;
-  }
-
-  let rem = dt;
-  while (anim && rem > 0) {
-    const st = anim.steps[anim.i];
-    if (!st) { finish(); break; }
-    if (st.k === 'm') {
-      const [tx, ty] = cellXY(st.at);
-      const need = (1 - anim.p) / SPEED;
-      if (rem >= need) {
-        rem -= need;
-        px = tx; py = ty; anim.fx = tx; anim.fy = ty; anim.p = 0; anim.i++;
-        arrive(st);
-      } else {
-        anim.p += rem * SPEED; rem = 0;
-        px = anim.fx + (tx - anim.fx) * anim.p;
-        py = anim.fy + (ty - anim.fy) * anim.p;
-      }
-    } else if (st.k === 't') {
-      const [tx, ty] = cellXY(st.at);
-      burst(px + 0.5, py + 0.5, portalColor(P.portalId[st.at]), 8, 0.7);
-      px = tx; py = ty; anim.fx = tx; anim.fy = ty; anim.i++;
-      burst(px + 0.5, py + 0.5, portalColor(P.portalId[st.at]), 8, 0.7);
-      sfx.portal();
-    } else { // bloque frágil
-      const [bx, by] = cellXY(st.at);
-      vis.blocks |= 1 << st.block;
-      burst(bx + 0.5, by + 0.5, '#c9b08a', 14);
-      sfx.crack();
-      squash = 1; squashDir = st.d; shake = 0.35;
-      anim.i++;
-    }
-  }
-}
-
-function finish() {
-  const { result, steps } = anim;
-  const lastStep = steps[steps.length - 1];
-  anim = null;
-  if (result === 'win') return win();
-  if (result === 'dead') {
-    busy = true; dead = 0.55; shake = 1; queued = -1;
-    burst(px + 0.5, py + 0.5, '#ff6b6b', 22, 1.3);
-    sfx.die();
-    return;
-  }
-  if (lastStep.k !== 'b') { squash = 1; squashDir = lastStep.d; sfx.bump(); }
-  if (queued >= 0) { const d = queued; queued = -1; input(d); }
+  if (won) return;
+  if (isDone(bottles)) return win();
+  if (!hasUsefulMove(bottles)) $('g-tip').textContent = 'No quedan movimientos: deshaz o añade una botella.';
 }
 
 function win() {
-  busy = true;
-  const slack = Math.max(2, Math.ceil(P.par * 0.4));
-  let stars = moves <= P.par ? 3 : moves <= P.par + slack ? 2 : 1;
-  if (usedHint) stars = Math.min(stars, 2);
-  save.stars[cur] = Math.max(starsOf(cur), stars);
+  won = true;
+  sel = -1; hint = null;
+  const firstTime = !isDoneLevel(cur);
+  save.done[cur] = save.done[cur] ? Math.min(save.done[cur], moves) : moves;
   persist();
+  updateHud();
   sfx.win();
-  burst(px + 0.5, py + 0.5, '#7dffb0', 30, 1.5);
+  confetti();
   const isLast = cur === LEVELS.length - 1;
-  const dayDone = cur % PER_WORLD === PER_WORLD - 1;
-  $('win-title').textContent = isLast ? '¡Juego completado!' : dayDone ? `¡Día ${dayOf(cur)} completado!` : '¡Nivel superado!';
-  $('win-stars').innerHTML = [1, 2, 3].map((n) => `<span class="${n <= stars ? 'on' : ''}">★</span>`).join('');
-  $('win-text').textContent = stars === 3 ? `Perfecto: ${moves} movimientos.`
-    : usedHint && moves <= P.par ? 'Con pista, máximo 2 estrellas.'
-    : `${moves} movimientos. El mínimo es ${P.par}.`;
+  const d = (cur + 1) % DRINK_EVERY === 0 ? DRINKS[(cur + 1) / DRINK_EVERY - 1] : null;
+  $('win-title').textContent = isLast ? '¡Lo has completado!' : CHEERS[cur % CHEERS.length];
+  $('win-text').textContent = isLast ? 'Los 100 niveles superados. Enhorabuena.' : `Nivel ${cur + 1} en ${moves} movimientos`;
+  $('win-drink').classList.toggle('hidden', !(d && firstTime));
+  if (d && firstTime) { $('win-drink-art').innerHTML = drinkSVG(d); $('win-drink-name').textContent = d.name; }
   $('win-next').textContent = isLast ? 'Inicio' : 'Siguiente';
   const level = cur;
-  setTimeout(() => { if (busy && cur === level && screen === 'game') $('win').classList.remove('hidden'); }, 550);
+  setTimeout(() => { if (won && cur === level && screen === 'game') $('win').classList.remove('hidden'); }, 1100);
 }
 
-// ---------- Dibujo ----------
+// ---------- Partículas ----------
+function sparkle(x, y, color, n) {
+  for (let q = 0; q < n; q++) {
+    const a = Math.random() * Math.PI * 2, v = 30 + Math.random() * 110;
+    particles.push({ x, y, vx: Math.cos(a) * v, vy: Math.sin(a) * v - 40, g: 60, life: 1, decay: 1.5, color, r: 2 + Math.random() * 3, kind: 0 });
+  }
+}
+function confetti() {
+  for (let q = 0; q < 110; q++) {
+    particles.push({
+      x: Math.random() * vw, y: -20 - Math.random() * vh * 0.4,
+      vx: (Math.random() - 0.5) * 60, vy: 120 + Math.random() * 160, g: 60,
+      life: 1, decay: 0.28, color: COLORS[(Math.random() * 10) | 0], r: 4 + Math.random() * 4,
+      kind: 1, rot: Math.random() * 6, vr: (Math.random() - 0.5) * 10,
+    });
+  }
+}
+
+// ---------- Geometría ----------
 function resize() {
   const r = $('stage').getBoundingClientRect();
-  if (!r.width || !P) return;
+  if (!r.width) return;
   const dpr = Math.min(window.devicePixelRatio || 1, 3);
   vw = r.width; vh = r.height;
   cv.width = Math.round(vw * dpr);
   cv.height = Math.round(vh * dpr);
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-  cs = Math.floor(Math.min((vw - 16) / P.w, (vh - 16) / P.h, 72));
-  ox = Math.round((vw - cs * P.w) / 2);
-  oy = Math.round((vh - cs * P.h) / 2);
+  layout();
+}
+
+function layout() {
+  const n = bottles.length;
+  if (!n || !vw) return;
+  const rows = n <= 5 ? 1 : 2;
+  const per = Math.ceil(n / rows);
+  W = Math.min((vw / per) * 0.6, 54, vh / (rows === 1 ? 8.4 : 13.6));
+  UH = W * 0.8;
+  H = UH * CAP + W * 0.45;
+  const head = 3.9 * W, gap = 2.1 * W; // aire para la botella que vierte
+  const body = rows * H + (rows - 1) * gap;
+  const top = Math.max(head, (vh - body) / 2 - 0.2 * W); // botellas centradas, con hueco arriba garantizado
+  const step = Math.min(vw / per, W * 2);
+  for (let i = 0; i < n; i++) {
+    const row = Math.floor(i / per);
+    const inRow = row === rows - 1 ? n - per * (rows - 1) : per;
+    view[i].x = vw / 2 + (i - row * per - (inRow - 1) / 2) * step;
+    view[i].y = top + row * (H + gap);
+    view[i].hit = step / 2;
+  }
+}
+
+// Ángulo al que el líquido llega justo al borde, según cuánto queda.
+function tilt(u) {
+  const L = u * UH, empty = H - L;
+  if (L < 0.01) return Math.PI * 0.52;
+  return empty <= H / 2 ? Math.atan((2 * empty) / W) : Math.atan((H * H) / (2 * W * L));
+}
+const ease = (x) => x * x * (3 - 2 * x);
+
+function pourPose(p) {
+  const A = view[p.a], B = view[p.b];
+  let kk, u, frac;
+  if (p.t < p.T1) { kk = ease(p.t / p.T1); u = p.u0; frac = 0; }
+  else if (p.t < p.T1 + p.T2) { kk = 1; frac = (p.t - p.T1) / p.T2; u = p.u0 - p.k * frac; }
+  else { kk = 1 - ease(Math.min(1, (p.t - p.T1 - p.T2) / p.T3)); u = p.u0 - p.k; frac = 1; }
+  const th = tilt(u);
+  const cx = B.x, cy = B.y - Math.max(W * 0.9, H * Math.cos(th) + W * 0.35); // punto por el que cae el chorro
+  const tx = cx - Math.cos(th) * p.s * W / 2, ty = cy - Math.sin(th) * W / 2;
+  const hx = A.x, hy = A.y - A.lift;
+  return { px: hx + (tx - hx) * kk, py: hy + (ty - hy) * kk, ang: p.s * th * kk, kk, frac, cx, cy };
+}
+
+// ---------- Dibujo ----------
+function tubePath() {
+  const r = W * 0.46;
+  ctx.beginPath();
+  ctx.moveTo(-W / 2, 0);
+  ctx.lineTo(-W / 2, H - r);
+  ctx.arc(-W / 2 + r, H - r, r, Math.PI, Math.PI / 2, true);
+  ctx.lineTo(W / 2 - r, H);
+  ctx.arc(W / 2 - r, H - r, r, Math.PI / 2, 0, true);
+  ctx.lineTo(W / 2, 0);
+  ctx.closePath();
 }
 
 function rr(x, y, w, h, r) {
@@ -318,170 +351,159 @@ function rr(x, y, w, h, r) {
   ctx.closePath();
 }
 
-const portalColor = (id) => ['#b388ff', '#ff9d5c', '#5cffd1', '#ff5ca8'][id] || '#b388ff';
+function shade(hex, k) {
+  const n = parseInt(hex.slice(1), 16);
+  const f = (v) => Math.max(0, Math.min(255, Math.round(v * k)));
+  return `rgb(${f(n >> 16)},${f((n >> 8) & 255)},${f(n & 255)})`;
+}
 
-function chevron(cx, cy, dir, size) {
+// Dibuja una botella con su líquido. El líquido siempre queda horizontal aunque la botella se incline.
+function drawBottle(px, py, ang, list, kk, s, corkT) {
+  const sin = Math.sin(ang), cos = Math.cos(ang);
+  const total = list.reduce((a, u) => a + u.amt, 0);
+  const yLow = py + Math.max(H * cos + (W / 2) * Math.abs(sin), (W / 2) * Math.abs(sin));
+  const yLip = py + (s * W / 2) * sin;
+  const depth = total * UH + (yLow - yLip - total * UH) * kk;
+
   ctx.save();
-  ctx.translate(cx, cy);
-  ctx.rotate((dir * Math.PI) / 2);
-  ctx.beginPath();
-  ctx.moveTo(-size, size * 0.5);
-  ctx.lineTo(0, -size * 0.5);
-  ctx.lineTo(size, size * 0.5);
+  ctx.translate(px, py);
+  ctx.rotate(ang);
+  tubePath();
+  ctx.fillStyle = 'rgba(255,255,255,.6)';
+  ctx.fill();
+
+  ctx.save();
+  ctx.clip();
+  ctx.rotate(-ang);
+  ctx.translate(-px, -py);
+  if (total > 0.001) {
+    let acc = 0;
+    for (const u of list) {
+      const y1 = yLow - (acc / total) * depth;
+      acc += u.amt;
+      const y0 = yLow - (acc / total) * depth;
+      ctx.fillStyle = u.hid ? HIDDEN : COLORS[u.c];
+      ctx.fillRect(px - H - W, y0 - 0.5, 2 * (H + W), y1 - y0 + 1);
+    }
+    ctx.fillStyle = 'rgba(255,255,255,.28)';
+    ctx.fillRect(px - H - W, yLow - depth - 0.5, 2 * (H + W), Math.min(3, depth));
+  }
+  ctx.restore();
+
+  // interrogantes de los colores ocultos (solo con la botella quieta)
+  if (kk === 0) {
+    ctx.fillStyle = '#a996bd';
+    ctx.font = `800 ${Math.round(UH * 0.52)}px ui-rounded, -apple-system, sans-serif`;
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    list.forEach((u, j) => { if (u.hid) ctx.fillText('?', 0, H - (j + 0.5) * UH); });
+  }
+
+  // cristal
+  tubePath();
+  ctx.lineWidth = Math.max(2, W * 0.055);
+  ctx.strokeStyle = 'rgba(122,92,142,.5)';
   ctx.stroke();
+  ctx.strokeStyle = 'rgba(255,255,255,.55)';
+  ctx.lineWidth = W * 0.09; ctx.lineCap = 'round';
+  ctx.beginPath(); ctx.moveTo(-W * 0.27, H * 0.1); ctx.lineTo(-W * 0.27, H * 0.78); ctx.stroke();
+  rr(-W / 2 - W * 0.08, -W * 0.09, W * 1.16, W * 0.18, W * 0.09);
+  ctx.fillStyle = '#fff'; ctx.fill();
+  ctx.lineWidth = Math.max(1.5, W * 0.04); ctx.strokeStyle = 'rgba(122,92,142,.5)'; ctx.stroke();
+
+  // corcho de botella terminada
+  if (corkT >= 0 && list.length) {
+    const k = Math.min(1, corkT * 5), drop = (1 - ease(k)) * W * 0.8;
+    ctx.globalAlpha = k;
+    rr(-W * 0.33, -W * 0.42 - drop, W * 0.66, W * 0.46, W * 0.12);
+    ctx.fillStyle = shade(COLORS[list[0].c], 0.78);
+    ctx.fill();
+    ctx.globalAlpha = 1;
+  }
   ctx.restore();
 }
 
 function draw() {
   ctx.clearRect(0, 0, vw, vh);
-  ctx.save();
-  if (shake > 0) ctx.translate((Math.random() - 0.5) * shake * 10, (Math.random() - 0.5) * shake * 10);
+  const pouring = new Map(pours.map((p) => [p.a, p]));
+  const receiving = new Map(pours.filter((p) => !p.landed).map((p) => [p.b, p]));
 
-  rr(ox - 8, oy - 8, cs * P.w + 16, cs * P.h + 16, 18);
-  ctx.fillStyle = '#131a36';
-  ctx.fill();
-
-  const rad = cs * 0.2;
-  for (let i = 0; i < P.n; i++) {
-    const cx = i % P.w, cy = Math.floor(i / P.w);
-    const x = ox + cx * cs, y = oy + cy * cs, mx = x + cs / 2, my = y + cs / 2;
-
-    if (P.type[i] === WALL) {
-      rr(x + 1, y + 1, cs - 2, cs - 2, rad);
-      ctx.fillStyle = '#34406f';
-      ctx.fill();
-      ctx.globalAlpha = 0.28; ctx.fillStyle = accent; ctx.fill(); ctx.globalAlpha = 1;
-      rr(x + 1, y + 1, cs - 2, cs * 0.42, rad);
-      ctx.fillStyle = 'rgba(255,255,255,.07)';
-      ctx.fill();
-      continue;
-    }
-
-    rr(x + 1, y + 1, cs - 2, cs - 2, rad);
-    ctx.fillStyle = (cx + cy) % 2 ? '#1b2447' : '#1f2a52';
-    ctx.fill();
-
-    if (P.type[i] === SPIKE) {
-      ctx.fillStyle = 'rgba(255,107,107,.16)';
-      ctx.fill();
-      ctx.fillStyle = '#ff6b6b';
-      const s = cs * 0.2;
-      for (const [sx, sy] of [[-1, -1], [1, -1], [-1, 1], [1, 1]]) {
-        const bx = mx + sx * s * 0.95, by = my + sy * s * 0.95;
-        ctx.beginPath();
-        ctx.moveTo(bx, by - s * 0.8);
-        ctx.lineTo(bx + s * 0.7, by + s * 0.6);
-        ctx.lineTo(bx - s * 0.7, by + s * 0.6);
-        ctx.closePath();
-        ctx.fill();
-      }
-    }
-
-    if (i === P.goal) {
-      const openGoal = vis.gems === P.allGems;
-      const pulse = openGoal ? 0.5 + 0.5 * Math.sin(T * 5) : 0;
-      ctx.lineWidth = cs * 0.1;
-      ctx.strokeStyle = openGoal ? '#7dffb0' : '#56608c';
-      ctx.beginPath(); ctx.arc(mx, my, cs * (0.28 + pulse * 0.03), 0, 7); ctx.stroke();
-      ctx.fillStyle = openGoal ? `rgba(125,255,176,${0.25 + pulse * 0.3})` : 'rgba(86,96,140,.2)';
-      ctx.beginPath(); ctx.arc(mx, my, cs * 0.16, 0, 7); ctx.fill();
-    }
-
-    if (P.portalId[i] >= 0) {
-      ctx.strokeStyle = portalColor(P.portalId[i]);
-      ctx.lineWidth = cs * 0.08;
-      ctx.setLineDash([cs * 0.22, cs * 0.12]);
-      ctx.lineDashOffset = -T * cs * 0.8;
-      ctx.beginPath(); ctx.arc(mx, my, cs * 0.3, 0, 7); ctx.stroke();
-      ctx.setLineDash([]);
-      ctx.globalAlpha = 0.35; ctx.fillStyle = ctx.strokeStyle;
-      ctx.beginPath(); ctx.arc(mx, my, cs * 0.17, 0, 7); ctx.fill();
-      ctx.globalAlpha = 1;
-    }
-
-    if (P.arrowAt[i] >= 0) {
-      ctx.strokeStyle = '#4dd6a8';
-      ctx.lineWidth = cs * 0.09; ctx.lineCap = 'round'; ctx.lineJoin = 'round';
-      const off = ((T * 1.5) % 1) * cs * 0.12;
-      const d = P.arrowAt[i];
-      ctx.globalAlpha = 0.9;
-      chevron(mx + DX[d] * (off - cs * 0.1), my + DY[d] * (off - cs * 0.1), d, cs * 0.2);
-      ctx.globalAlpha = 0.4;
-      chevron(mx + DX[d] * (off + cs * 0.1), my + DY[d] * (off + cs * 0.1), d, cs * 0.2);
-      ctx.globalAlpha = 1;
-    }
-
-    const b = P.blockAt[i];
-    if (b >= 0 && !((vis.blocks >> b) & 1)) {
-      rr(x + 3, y + 3, cs - 6, cs - 6, rad);
-      ctx.fillStyle = '#b39a74';
-      ctx.fill();
-      ctx.strokeStyle = '#5d4c33';
-      ctx.lineWidth = Math.max(1.5, cs * 0.04); ctx.lineCap = 'round'; ctx.lineJoin = 'round';
-      ctx.beginPath();
-      ctx.moveTo(x + cs * 0.3, y + cs * 0.14);
-      ctx.lineTo(x + cs * 0.46, y + cs * 0.42);
-      ctx.lineTo(x + cs * 0.36, y + cs * 0.6);
-      ctx.lineTo(x + cs * 0.56, y + cs * 0.86);
-      ctx.moveTo(x + cs * 0.46, y + cs * 0.42);
-      ctx.lineTo(x + cs * 0.74, y + cs * 0.5);
-      ctx.stroke();
-    }
-
-    const g = P.gemAt[i];
-    if (g >= 0 && !((vis.gems >> g) & 1)) {
-      const bob = Math.sin(T * 3 + i) * cs * 0.03, s = cs * 0.2;
-      ctx.fillStyle = '#ffd24a';
-      ctx.beginPath();
-      ctx.moveTo(mx, my - s * 1.2 + bob); ctx.lineTo(mx + s, my + bob);
-      ctx.lineTo(mx, my + s * 1.2 + bob); ctx.lineTo(mx - s, my + bob);
-      ctx.closePath(); ctx.fill();
-      ctx.fillStyle = 'rgba(255,255,255,.55)';
-      ctx.beginPath();
-      ctx.moveTo(mx, my - s * 1.2 + bob); ctx.lineTo(mx + s, my + bob); ctx.lineTo(mx, my + bob);
-      ctx.closePath(); ctx.fill();
-    }
+  // sombras
+  ctx.fillStyle = 'rgba(122,92,142,.1)';
+  for (const v of view) {
+    ctx.beginPath(); ctx.ellipse(v.x, v.y + H + W * 0.14, W * 0.52, W * 0.11, 0, 0, 7); ctx.fill();
   }
 
-  // pista
-  if (hint && !anim) {
-    const a = 0.5 + 0.5 * Math.sin(hint.t * 8), d = hint.dir;
-    ctx.strokeStyle = `rgba(255,255,255,${0.5 + a * 0.5})`;
-    ctx.lineWidth = cs * 0.12; ctx.lineCap = 'round'; ctx.lineJoin = 'round';
-    const k = cs * (0.85 + a * 0.15);
-    chevron(ox + (px + 0.5) * cs + DX[d] * k, oy + (py + 0.5) * cs + DY[d] * k, d, cs * 0.24);
+  view.forEach((v, i) => {
+    if (pouring.has(i)) return;
+    let list = units(i);
+    const p = receiving.get(i);
+    if (p) {
+      const f = p.t < p.T1 ? 0 : Math.min(1, (p.t - p.T1) / p.T2);
+      list = p.fromB.concat(f > 0 ? [{ c: p.c, hid: false, amt: p.k * f }] : []);
+    }
+    const shakeX = v.nudge > 0 ? Math.sin(v.nudge * 18) * W * 0.12 * v.nudge : 0;
+    const complete = !p && isComplete(bottles[i]);
+    drawBottle(v.x + shakeX, v.y - v.lift, 0, list, 0, 1, complete ? (v.doneT < 0 ? 1 : T - v.doneT) : -1);
+  });
+
+  // marca de pista sobre la botella destino
+  if (hint && view[hint.to]) {
+    const v = view[hint.to], b = Math.sin(hint.t * 6) * W * 0.16;
+    ctx.fillStyle = '#ff6b8b';
+    ctx.beginPath();
+    ctx.moveTo(v.x - W * 0.3, v.y - W * 1.05 + b); ctx.lineTo(v.x + W * 0.3, v.y - W * 1.05 + b); ctx.lineTo(v.x, v.y - W * 0.55 + b);
+    ctx.closePath(); ctx.fill();
   }
 
-  // jugador
-  if (dead <= 0 || dead > 0.4) {
-    const mx = ox + (px + 0.5) * cs, my = oy + (py + 0.5) * cs;
-    const horiz = squashDir % 2 === 1;
-    const q = Math.sin(squash * Math.PI) * 0.22;
-    const sw = cs * 0.74 * (horiz ? 1 - q : 1 + q * 0.6);
-    const sh = cs * 0.74 * (horiz ? 1 + q * 0.6 : 1 - q);
-    const nx = mx + DX[squashDir] * q * cs * 0.3, ny = my + DY[squashDir] * q * cs * 0.3;
-    ctx.shadowColor = accent; ctx.shadowBlur = cs * 0.35;
-    rr(nx - sw / 2, ny - sh / 2, sw, sh, cs * 0.24);
-    ctx.fillStyle = '#f4f7ff';
-    ctx.fill();
-    ctx.shadowBlur = 0;
-    ctx.fillStyle = '#0b1020';
-    const ex = nx + DX[face] * cs * 0.1, ey = ny + DY[face] * cs * 0.1 - cs * 0.03;
-    const blink = T % 3.2 < 0.12 ? 0.2 : 1;
-    for (const sgn of [-1, 1]) {
-      ctx.beginPath();
-      ctx.ellipse(ex + sgn * cs * 0.13, ey, cs * 0.055, cs * 0.085 * blink, 0, 0, 7);
+  for (const p of pours) {
+    const pose = pourPose(p);
+    const B = view[p.b];
+    if (p.t >= p.T1 && p.t < p.T1 + p.T2) { // chorro
+      const surface = B.y + H - (p.fromB.length + p.k * pose.frac) * UH;
+      const sw = W * 0.17;
+      ctx.fillStyle = COLORS[p.c];
+      rr(pose.cx - sw / 2, pose.cy - 2, sw, surface - pose.cy + 4, sw / 2);
       ctx.fill();
     }
+    const f = p.t < p.T1 ? 0 : Math.min(1, (p.t - p.T1) / p.T2);
+    const list = p.fromA.map((u, j) => (j >= p.fromA.length - p.k ? { ...u, amt: 1 - f } : u));
+    drawBottle(pose.px, pose.py, pose.ang, list, pose.kk, p.s, -1);
   }
 
   for (const q of particles) {
-    ctx.globalAlpha = Math.max(0, q.life);
+    ctx.globalAlpha = Math.max(0, Math.min(1, q.life * 2));
     ctx.fillStyle = q.color;
-    ctx.beginPath(); ctx.arc(ox + q.x * cs, oy + q.y * cs, q.r * cs * (0.5 + q.life), 0, 7); ctx.fill();
+    if (q.kind === 1) {
+      ctx.save(); ctx.translate(q.x, q.y); ctx.rotate(q.rot);
+      ctx.fillRect(-q.r, -q.r * 0.45, q.r * 2, q.r * 0.9);
+      ctx.restore();
+    } else {
+      ctx.beginPath(); ctx.arc(q.x, q.y, q.r * (0.4 + q.life * 0.6), 0, 7); ctx.fill();
+    }
   }
   ctx.globalAlpha = 1;
-  ctx.restore();
+}
+
+function update(dt) {
+  T += dt;
+  if (hint) hint.t += dt;
+  view.forEach((v, i) => {
+    const target = i === sel ? UH * 0.6 : 0;
+    v.lift += (target - v.lift) * Math.min(1, dt * 18);
+    v.nudge = Math.max(0, v.nudge - dt * 3);
+  });
+  for (const p of pours) {
+    p.t += dt;
+    if (!p.started && p.t >= p.T1) { p.started = true; sfx.pour(p.T2); }
+    if (!p.landed && p.t >= p.T1 + p.T2) { p.landed = true; landed(p); }
+    if (p.t >= p.T1 + p.T2 + p.T3) { p.finished = true; view[p.a].busy = false; }
+  }
+  pours = pours.filter((p) => !p.finished);
+  for (const q of particles) {
+    q.vy += q.g * dt; q.x += q.vx * dt; q.y += q.vy * dt; q.life -= dt * q.decay;
+    if (q.kind === 1) { q.rot += q.vr * dt; q.vx += Math.sin(T * 3 + q.r) * 40 * dt; }
+  }
+  particles = particles.filter((q) => q.life > 0 && q.y < vh + 30);
 }
 
 function frame(t) {
@@ -494,34 +516,22 @@ function frame(t) {
 }
 
 // ---------- Entrada ----------
-let sx = 0, sy = 0, tracking = false;
-const SWIPE = 22;
-$('game').addEventListener('pointerdown', (e) => {
+cv.addEventListener('pointerdown', (e) => {
   unlockAudio();
-  if (e.target.closest('button')) return;
-  tracking = true; sx = e.clientX; sy = e.clientY;
-});
-window.addEventListener('pointermove', (e) => {
-  if (!tracking) return;
-  const dx = e.clientX - sx, dy = e.clientY - sy;
-  if (Math.abs(dx) < SWIPE && Math.abs(dy) < SWIPE) return;
-  input(Math.abs(dx) > Math.abs(dy) ? (dx > 0 ? 1 : 3) : (dy > 0 ? 2 : 0));
-  sx = e.clientX; sy = e.clientY; // permite encadenar deslizamientos sin levantar el dedo
-});
-const stopTrack = () => { tracking = false; };
-window.addEventListener('pointerup', stopTrack);
-window.addEventListener('pointercancel', stopTrack);
-window.addEventListener('keydown', (e) => {
-  const d = { ArrowUp: 0, ArrowRight: 1, ArrowDown: 2, ArrowLeft: 3 }[e.key];
-  if (d !== undefined) { e.preventDefault(); input(d); }
-  else if (e.key === 'z') undo();
-  else if (e.key === 'r') resetLevel();
+  const r = cv.getBoundingClientRect();
+  const x = e.clientX - r.left, y = e.clientY - r.top;
+  let best = -1, bd = Infinity;
+  view.forEach((v, i) => {
+    const dx = Math.abs(x - v.x);
+    if (dx <= v.hit && y > v.y - W * 1.2 && y < v.y + H + W * 0.8 && dx < bd) { bd = dx; best = i; }
+  });
+  if (best >= 0) tap(best);
+  else if (sel >= 0 && !won) { sel = -1; hint = null; sfx.drop(); }
 });
 // iOS: sin zoom por pellizco ni por doble toque
 document.addEventListener('gesturestart', (e) => e.preventDefault());
 document.addEventListener('dblclick', (e) => e.preventDefault());
 document.addEventListener('pointerdown', unlockAudio, { once: true });
-
 window.addEventListener('resize', resize);
 window.addEventListener('orientationchange', () => setTimeout(resize, 200));
 
@@ -529,13 +539,15 @@ window.addEventListener('orientationchange', () => setTimeout(resize, 200));
 const on = (id, fn) => { $(id).onclick = () => { sfx.tap(); fn(); }; };
 on('btn-play', () => { const i = firstPending(); if (i < 0) show('levels'); else startLevel(i); });
 on('btn-levels', () => show('levels'));
+on('btn-menu', () => show('menu'));
 on('btn-sound', () => { save.sound = !save.sound; persist(); renderHome(); sfx.tap(); });
 on('lv-back', () => show('home'));
-on('g-back', () => show('levels'));
+on('menu-back', () => show('home'));
+on('g-back', () => show('home'));
 on('g-undo', undo);
-on('g-restart', resetLevel);
+on('g-restart', () => startLevel(cur));
 on('g-hint', showHint);
-on('win-retry', () => startLevel(cur));
+on('g-extra', addBottle);
 on('win-next', () => { if (cur === LEVELS.length - 1) show('home'); else startLevel(cur + 1); });
 
 // ---------- PWA ----------
@@ -543,5 +555,14 @@ const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platfor
 const standalone = window.navigator.standalone === true || matchMedia('(display-mode: standalone)').matches;
 if (isIOS && !standalone) $('install-hint').classList.remove('hidden');
 if ('serviceWorker' in navigator) navigator.serviceWorker.register('./sw.js').catch(() => {});
+
+// Solo para las pruebas automáticas (?test).
+if (location.search.includes('test')) {
+  window.__test = {
+    state: () => ({ bottles, won, busy: pours.length > 0, sel }),
+    xy: (i) => { const r = cv.getBoundingClientRect(); return [r.left + view[i].x, r.top + view[i].y + H / 2]; },
+    next: () => { const s = solve(bottles, 60000); return s && s.moves[0]; },
+  };
+}
 
 renderHome();

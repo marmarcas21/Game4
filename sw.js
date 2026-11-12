@@ -1,6 +1,6 @@
 // Service worker: deja el juego disponible sin conexión.
 // Sube VERSION al publicar cambios para renovar la caché.
-const VERSION = 'desliza-v1';
+const VERSION = 'mimosa-v1';
 const FILES = [
   './',
   './index.html',
@@ -8,6 +8,7 @@ const FILES = [
   './js/game.js',
   './js/engine.js',
   './js/levels.js',
+  './js/drinks.js',
   './manifest.webmanifest',
   './icons/icon-180.png',
   './icons/icon-192.png',

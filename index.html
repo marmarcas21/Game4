@@ -3,15 +3,15 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
-  <title>Desliza</title>
-  <meta name="description" content="Puzzle de deslizar: 70 niveles en 7 días.">
-  <meta name="theme-color" content="#0b1020">
+  <title>Mimosa</title>
+  <meta name="description" content="Ordena los colores. 100 niveles para desconectar.">
+  <meta name="theme-color" content="#fff4ee">
 
   <!-- PWA en iOS -->
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="mobile-web-app-capable" content="yes">
-  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-  <meta name="apple-mobile-web-app-title" content="Desliza">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <meta name="apple-mobile-web-app-title" content="Mimosa">
   <meta name="format-detection" content="telephone=no">
   <link rel="apple-touch-icon" href="icons/icon-180.png">
   <link rel="icon" type="image/png" href="icons/icon-192.png">
@@ -24,19 +24,23 @@
 
     <section id="home" class="screen active">
       <div class="home-top">
-        <img class="logo" src="icons/icon-192.png" alt="" width="96" height="96">
-        <h1>Desliza</h1>
-        <p class="sub">7 días · 70 niveles</p>
+        <img class="logo" src="icons/icon-192.png" alt="" width="104" height="104">
+        <h1>Mimosa</h1>
+        <p class="sub">Ordena los colores y desconecta</p>
       </div>
       <div class="home-mid">
         <button id="btn-play" class="btn primary">Jugar</button>
-        <button id="btn-levels" class="btn">Niveles</button>
+        <div class="meter"><i id="home-bar"></i></div>
         <p id="home-progress" class="progress"></p>
+        <div class="pair">
+          <button id="btn-menu" class="btn">Mi carta</button>
+          <button id="btn-levels" class="btn">Niveles</button>
+        </div>
       </div>
       <div class="home-bottom">
-        <button id="btn-sound" class="btn small">Sonido: sí</button>
+        <button id="btn-sound" class="link">Sonido: sí</button>
         <p id="install-hint" class="install hidden">
-          Para instalarlo: pulsa <b>Compartir</b> y luego <b>Añadir a pantalla de inicio</b>.
+          Para instalarla, pulsa <b>Compartir</b> y luego <b>Añadir a pantalla de inicio</b>.
         </p>
       </div>
     </section>
@@ -45,34 +49,45 @@
       <header class="bar">
         <button id="lv-back" class="icon" aria-label="Volver">‹</button>
         <h2>Niveles</h2>
-        <span id="lv-stars" class="bar-right"></span>
+        <span id="lv-count" class="bar-right"></span>
       </header>
-      <div id="lv-list"></div>
+      <div id="lv-list" class="scroll"></div>
+    </section>
+
+    <section id="menu" class="screen">
+      <header class="bar">
+        <button id="menu-back" class="icon" aria-label="Volver">‹</button>
+        <h2>Mi carta</h2>
+        <span id="menu-count" class="bar-right"></span>
+      </header>
+      <div id="menu-list" class="scroll"></div>
     </section>
 
     <section id="game" class="screen">
       <header class="bar">
-        <button id="g-back" class="icon" aria-label="Niveles">‹</button>
+        <button id="g-back" class="icon" aria-label="Inicio">‹</button>
         <h2 id="g-title"></h2>
         <span id="g-moves" class="bar-right"></span>
       </header>
       <p id="g-tip"></p>
       <div id="stage"><canvas id="cv"></canvas></div>
       <footer class="tools">
-        <button id="g-undo" class="btn small">Deshacer</button>
-        <button id="g-restart" class="btn small">Reiniciar</button>
-        <button id="g-hint" class="btn small">Pista</button>
+        <button id="g-undo" class="tool"><b>↶</b>Deshacer</button>
+        <button id="g-restart" class="tool"><b>⟲</b>Reiniciar</button>
+        <button id="g-hint" class="tool"><b>✦</b>Pista</button>
+        <button id="g-extra" class="tool"><b>＋</b>Botella</button>
       </footer>
 
       <div id="win" class="overlay hidden">
         <div class="card">
-          <h3 id="win-title">¡Nivel superado!</h3>
-          <div id="win-stars" class="stars"></div>
+          <h3 id="win-title"></h3>
           <p id="win-text"></p>
-          <div class="row">
-            <button id="win-retry" class="btn">Repetir</button>
-            <button id="win-next" class="btn primary">Siguiente</button>
+          <div id="win-drink" class="unlock hidden">
+            <div id="win-drink-art"></div>
+            <small>Nueva en tu carta</small>
+            <strong id="win-drink-name"></strong>
           </div>
+          <button id="win-next" class="btn primary">Siguiente</button>
         </div>
       </div>
     </section>

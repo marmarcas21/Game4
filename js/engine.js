@@ -1,123 +1,75 @@
-// Lógica pura del juego (sin DOM). La usan el juego y el generador de niveles.
-//
-// Caracteres de un nivel:
-//   #  muro            .  suelo           S  inicio         G  salida
-//   *  gema            X  pinchos         B  bloque frágil
-//   ^ > v <  flechas   a b c d  portales (por parejas)
+// Reglas del juego y solucionador. Sin DOM: lo usan el juego y el generador.
+// Una botella es un array de colores (enteros) de abajo arriba.
 
-export const DX = [0, 1, 0, -1]; // 0 arriba, 1 derecha, 2 abajo, 3 izquierda
-export const DY = [-1, 0, 1, 0];
+export const CAP = 4;
 
-export const FLOOR = 0, WALL = 1, SPIKE = 2;
-const ARROWS = { '^': 0, '>': 1, 'v': 2, '<': 3 };
+export const isUniform = (b) => b.every((c) => c === b[0]);
+export const isComplete = (b) => b.length === CAP && isUniform(b);
+export const isDone = (bs) => bs.every((b) => b.length === 0 || isComplete(b));
 
-export function parseLevel(lv) {
-  const h = lv.rows.length, w = lv.rows[0].length, n = w * h;
-  const p = {
-    w, h, n, par: lv.par || 0,
-    type: new Uint8Array(n),
-    gemAt: new Int8Array(n).fill(-1),
-    blockAt: new Int8Array(n).fill(-1),
-    arrowAt: new Int8Array(n).fill(-1),
-    portalTo: new Int16Array(n).fill(-1),
-    portalId: new Int8Array(n).fill(-1),
-    gems: [], blocks: [], start: 0, goal: -1,
-  };
-  const open = {};
-  for (let y = 0; y < h; y++) {
-    for (let x = 0; x < w; x++) {
-      const c = lv.rows[y][x], i = y * w + x;
-      if (c === '#') p.type[i] = WALL;
-      else if (c === 'X') p.type[i] = SPIKE;
-      else if (c === 'S') p.start = i;
-      else if (c === 'G') p.goal = i;
-      else if (c === '*') { p.gemAt[i] = p.gems.length; p.gems.push(i); }
-      else if (c === 'B') { p.blockAt[i] = p.blocks.length; p.blocks.push(i); }
-      else if (c in ARROWS) p.arrowAt[i] = ARROWS[c];
-      else if (c >= 'a' && c <= 'd') {
-        p.portalId[i] = c.charCodeAt(0) - 97;
-        if (c in open) { p.portalTo[i] = open[c]; p.portalTo[open[c]] = i; }
-        else open[c] = i;
+export function runLen(b) {
+  if (!b.length) return 0;
+  let n = 1;
+  while (n < b.length && b[b.length - 1 - n] === b[b.length - 1]) n++;
+  return n;
+}
+
+export function canPour(a, b) {
+  return a.length > 0 && b.length < CAP && (b.length === 0 || b[b.length - 1] === a[a.length - 1]);
+}
+
+// Movimientos que tienen sentido, ordenados del más prometedor al menos.
+function candidates(bs) {
+  const out = [];
+  const firstEmpty = bs.findIndex((b) => b.length === 0);
+  for (let i = 0; i < bs.length; i++) {
+    const a = bs[i];
+    if (!a.length || isComplete(a)) continue;
+    const c = a[a.length - 1], n = runLen(a), whole = n === a.length;
+    for (let j = 0; j < bs.length; j++) {
+      if (j === i) continue;
+      const b = bs[j];
+      let score;
+      if (b.length === 0) {
+        if (whole || j !== firstEmpty) continue; // mover una botella de un solo color a una vacía no aporta
+        score = 1;
+      } else {
+        if (b.length === CAP || b[b.length - 1] !== c) continue;
+        const space = CAP - b.length;
+        score = n > space ? 0 : 3 + (whole ? 2 : 0) + (isUniform(b) ? 1 : 0);
       }
+      out.push({ i, j, score });
     }
   }
-  p.allGems = (1 << p.gems.length) - 1;
-  return p;
+  return out.sort((p, q) => q.score - p.score);
 }
 
-export function initState(p) {
-  return { pos: p.start, gems: 0, blocks: 0 };
-}
+export const hasUsefulMove = (bs) => candidates(bs).length > 0;
 
-// Desliza desde el estado `s` en la dirección `dir`.
-// Devuelve el estado final, los pasos (para animar) y el resultado:
-// 'stop' | 'win' | 'dead'. `moved` es false si no ha pasado nada.
-export function slide(p, s, dir) {
-  let pos = s.pos, gems = s.gems, blocks = s.blocks, d = dir;
-  let result = 'stop';
-  const steps = [];
+// Búsqueda en profundidad con memoria. Devuelve { moves: [[de, a], ...], nodes } o null.
+export function solve(start, limit = 40000) {
+  const bs = start.map((b) => b.slice());
   const seen = new Set();
-  for (;;) {
-    const x = pos % p.w, y = (pos / p.w) | 0;
-    const nx = x + DX[d], ny = y + DY[d];
-    if (nx < 0 || ny < 0 || nx >= p.w || ny >= p.h) break;
-    const n = ny * p.w + nx;
-    if (p.type[n] === WALL) break;
-    const b = p.blockAt[n];
-    if (b >= 0 && !((blocks >> b) & 1)) {
-      blocks |= 1 << b;
-      steps.push({ k: 'b', at: n, block: b, d });
-      break;
+  const path = [];
+  let nodes = 0;
+  const key = () => bs.map((b) => b.join(',')).sort().join('|');
+  const rec = () => {
+    if (isDone(bs)) return true;
+    if (++nodes > limit) return false;
+    const k = key();
+    if (seen.has(k)) return false;
+    seen.add(k);
+    for (const { i, j } of candidates(bs)) {
+      const a = bs[i], b = bs[j];
+      const k2 = Math.min(runLen(a), CAP - b.length);
+      for (let q = 0; q < k2; q++) b.push(a.pop());
+      path.push([i, j]);
+      if (rec()) return true;
+      path.pop();
+      for (let q = 0; q < k2; q++) a.push(b.pop());
+      if (nodes > limit) return false;
     }
-    pos = n;
-    const st = { k: 'm', at: n, d };
-    steps.push(st);
-    const g = p.gemAt[n];
-    if (g >= 0 && !((gems >> g) & 1)) { gems |= 1 << g; st.gem = g; }
-    if (p.type[n] === SPIKE) { result = 'dead'; break; }
-    if (n === p.goal && gems === p.allGems) { result = 'win'; break; }
-    if (p.portalTo[n] >= 0) {
-      pos = p.portalTo[n];
-      steps.push({ k: 't', at: pos, from: n, d });
-    }
-    if (p.arrowAt[pos] >= 0) d = p.arrowAt[pos];
-    const key = pos * 4 + d;
-    if (seen.has(key)) { result = 'dead'; break; } // bucle infinito de flechas
-    seen.add(key);
-  }
-  return { state: { pos, gems, blocks }, steps, result, moved: steps.length > 0 };
-}
-
-// Búsqueda en anchura: solución con el mínimo de movimientos desde `s0`.
-// Devuelve { moves, dirs } o null si no hay salida.
-export function solve(p, s0, limit = 300000) {
-  const ng = p.gems.length;
-  const key = (s) => s.pos + p.n * (s.gems + (s.blocks << ng));
-  const prev = new Map();
-  prev.set(key(s0), null);
-  let frontier = [s0];
-  let depth = 0;
-  while (frontier.length && prev.size < limit) {
-    depth++;
-    const next = [];
-    for (const s of frontier) {
-      const ks = key(s);
-      for (let d = 0; d < 4; d++) {
-        const r = slide(p, s, d);
-        if (!r.moved || r.result === 'dead') continue;
-        if (r.result === 'win') {
-          const dirs = [d];
-          let k = ks;
-          for (let e = prev.get(k); e; e = prev.get(k)) { dirs.push(e.d); k = e.k; }
-          return { moves: depth, dirs: dirs.reverse() };
-        }
-        const kn = key(r.state);
-        if (prev.has(kn)) continue;
-        prev.set(kn, { k: ks, d });
-        next.push(r.state);
-      }
-    }
-    frontier = next;
-  }
-  return null;
+    return false;
+  };
+  return rec() ? { moves: path, nodes } : null;
 }

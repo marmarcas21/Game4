@@ -1,9 +1,9 @@
 {
-  "name": "desliza",
-  "version": "1.0.0",
+  "name": "mimosa",
+  "version": "2.0.0",
   "private": true,
   "type": "module",
-  "description": "Desliza: puzzle de 70 niveles en 7 días. PWA para iOS, sin dependencias.",
+  "description": "Mimosa: puzzle de ordenar colores con 100 niveles. PWA para iOS, sin dependencias.",
   "scripts": {
     "start": "python3 -m http.server 8080",
     "levels": "node tools/gen-levels.mjs"
