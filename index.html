@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+  <title>Desliza</title>
+  <meta name="description" content="Puzzle de deslizar: 70 niveles en 7 días.">
+  <meta name="theme-color" content="#0b1020">
+
+  <!-- PWA en iOS -->
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="Desliza">
+  <meta name="format-detection" content="telephone=no">
+  <link rel="apple-touch-icon" href="icons/icon-180.png">
+  <link rel="icon" type="image/png" href="icons/icon-192.png">
+  <link rel="manifest" href="manifest.webmanifest">
+
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+  <main id="app">
+
+    <section id="home" class="screen active">
+      <div class="home-top">
+        <img class="logo" src="icons/icon-192.png" alt="" width="96" height="96">
+        <h1>Desliza</h1>
+        <p class="sub">7 días · 70 niveles</p>
+      </div>
+      <div class="home-mid">
+        <button id="btn-play" class="btn primary">Jugar</button>
+        <button id="btn-levels" class="btn">Niveles</button>
+        <p id="home-progress" class="progress"></p>
+      </div>
+      <div class="home-bottom">
+        <button id="btn-sound" class="btn small">Sonido: sí</button>
+        <p id="install-hint" class="install hidden">
+          Para instalarlo: pulsa <b>Compartir</b> y luego <b>Añadir a pantalla de inicio</b>.
+        </p>
+      </div>
+    </section>
+
+    <section id="levels" class="screen">
+      <header class="bar">
+        <button id="lv-back" class="icon" aria-label="Volver">‹</button>
+        <h2>Niveles</h2>
+        <span id="lv-stars" class="bar-right"></span>
+      </header>
+      <div id="lv-list"></div>
+    </section>
+
+    <section id="game" class="screen">
+      <header class="bar">
+        <button id="g-back" class="icon" aria-label="Niveles">‹</button>
+        <h2 id="g-title"></h2>
+        <span id="g-moves" class="bar-right"></span>
+      </header>
+      <p id="g-tip"></p>
+      <div id="stage"><canvas id="cv"></canvas></div>
+      <footer class="tools">
+        <button id="g-undo" class="btn small">Deshacer</button>
+        <button id="g-restart" class="btn small">Reiniciar</button>
+        <button id="g-hint" class="btn small">Pista</button>
+      </footer>
+
+      <div id="win" class="overlay hidden">
+        <div class="card">
+          <h3 id="win-title">¡Nivel superado!</h3>
+          <div id="win-stars" class="stars"></div>
+          <p id="win-text"></p>
+          <div class="row">
+            <button id="win-retry" class="btn">Repetir</button>
+            <button id="win-next" class="btn primary">Siguiente</button>
+          </div>
+        </div>
+      </div>
+    </section>
+
+  </main>
+  <script type="module" src="js/game.js"></script>
+</body>
+</html>
