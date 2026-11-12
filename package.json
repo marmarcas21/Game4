@@ -1,9 +1,9 @@
 {
-  "name": "mimosa",
-  "version": "2.0.0",
+  "name": "brota",
+  "version": "3.0.0",
   "private": true,
   "type": "module",
-  "description": "Mimosa: puzzle de ordenar colores con 100 niveles. PWA para iOS, sin dependencias.",
+  "description": "Brota: puzzle de plantar flores con 80 niveles. PWA para iOS, sin dependencias.",
   "scripts": {
     "start": "python3 -m http.server 8080",
     "levels": "node tools/gen-levels.mjs"

@@ -1,17 +1,28 @@
-// Genera los 100 niveles y los escribe en js/levels.js.
-// Cada nivel se comprueba con el solucionador, así que todos tienen solución.
+// Genera los 80 niveles y los escribe en js/levels.js.
 //
 //   node tools/gen-levels.mjs
 //
-// Tipos: n = normal, m = misterio (colores ocultos), r = reto (una sola botella vacía).
+// Cada jardín se construye al revés: se plantan semillas al azar en una rejilla
+// y la tierra del nivel es justo lo que floreció, así que siempre tiene solución.
+// La dificultad se mide con el solucionador: qué parte de los primeros
+// movimientos posibles deja el jardín todavía resoluble (cuanto menos, más difícil).
 
 import { writeFileSync } from 'node:fs';
-import { CAP, isComplete, solve } from '../js/engine.js';
+import { SPECIES, growth, parseLevel, solve } from '../js/engine.js';
 
-const TOTAL = 100;
-const PALETTE = 12;
-// Nivel en el que empieza cada tramo y cuántos colores tiene.
-const TIERS = [[1, 2], [2, 3], [4, 4], [7, 5], [12, 6], [19, 7], [28, 8], [39, 9], [53, 10], [69, 11], [85, 12], [TOTAL + 1, 12]];
+const TOTAL = 80;
+// [primer nivel, especies permitidas, especie nueva, ancho, alto, semillas de..a]
+const TIERS = [
+  [2, 'D', '', 4, 4, 2, 4],
+  [7, 'DTL', 'TL', 5, 5, 3, 5],
+  [15, 'DTLC', 'C', 5, 6, 4, 6],
+  [25, 'DTLCR', 'R', 6, 6, 5, 7],
+  [37, 'DTLCRS', 'S', 6, 7, 5, 8],
+  [51, 'DTLCRSP', 'P', 6, 7, 6, 8],
+  [65, 'DTLCRSP', '', 6, 8, 7, 10],
+  [TOTAL + 1],
+];
+const MIN_COVER = { D: 3, T: 2, L: 2, C: 1, R: 4, S: 3, P: 2 };
 
 function rng(seed) {
   let a = seed >>> 0;
@@ -23,56 +34,111 @@ function rng(seed) {
   };
 }
 
-function shuffle(arr, r) {
-  for (let i = arr.length - 1; i > 0; i--) {
-    const j = (r() * (i + 1)) | 0;
-    [arr[i], arr[j]] = [arr[j], arr[i]];
-  }
-  return arr;
-}
-
 function spec(n) {
   const ti = TIERS.findIndex(([from], k) => n >= from && n < TIERS[k + 1][0]);
-  const [from, colors] = TIERS[ti];
-  const pos = (n - from) / Math.max(1, TIERS[ti + 1][0] - from - 1); // 0..1 dentro del tramo
-  if (n >= 10 && n % 10 === 0) return { type: 'r', colors: Math.min(7, Math.max(4, colors - 3)), empties: 1, pos };
-  if (n >= 14 && n % 4 === 2) return { type: 'm', colors: Math.max(4, colors - 1), empties: 2, pos };
-  return { type: 'n', colors, empties: 2, pos };
+  const [from, allowed, fresh, W, H, lo, hi] = TIERS[ti];
+  const pos = (n - from) / Math.max(1, TIERS[ti + 1][0] - from - 1);
+  const intro = n === from && fresh !== '';
+  return { allowed, fresh, W, H, pos, intro, seeds: intro ? Math.max(3, lo - 1) : Math.round(lo + (hi - lo) * pos) };
+}
+
+function connected(cells, w, h) {
+  const start = cells.findIndex((v) => v !== -1);
+  const seen = new Set([start]);
+  const stack = [start];
+  while (stack.length) {
+    const c = stack.pop(), x = c % w, y = (c / w) | 0;
+    for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
+      const nx = x + dx, ny = y + dy, i = ny * w + nx;
+      if (nx < 0 || ny < 0 || nx >= w || ny >= h || cells[i] === -1 || seen.has(i)) continue;
+      seen.add(i); stack.push(i);
+    }
+  }
+  return seen.size === cells.filter((v) => v !== -1).length;
 }
 
 function candidate(sp, r) {
-  const ids = shuffle([...Array(PALETTE).keys()], r).slice(0, sp.colors);
-  const units = shuffle(ids.flatMap((c) => Array(CAP).fill(c)), r);
-  const bottles = [];
-  for (let i = 0; i < sp.colors; i++) bottles.push(units.slice(i * CAP, (i + 1) * CAP));
-  for (let i = 0; i < sp.empties; i++) bottles.push([]);
-  if (bottles.some(isComplete)) return null;
-  const sol = solve(bottles, sp.type === 'r' ? 30000 : 120000);
-  return sol ? { bottles, nodes: sol.nodes, len: sol.moves.length } : null;
+  const { W, H } = sp;
+  const cells = new Int8Array(W * H);
+  const dens = 0.12 + r() * 0.2;
+  for (let i = 0; i < cells.length; i++) if (r() < dens) cells[i] = -1;
+  const pool = sp.allowed.split('').flatMap((ch) => Array(ch === 'C' ? 1 : sp.fresh.includes(ch) ? 5 : 3).fill(ch));
+  const forced = sp.fresh.split(''); // la especie nueva aparece seguro
+  const seeds = [], planted = [];
+  for (let k = 0; k < sp.seeds; k++) {
+    let done = false;
+    for (let t = 0; t < 30 && !done; t++) {
+      const ch = k < forced.length ? forced[k] : pool[(r() * pool.length) | 0];
+      if (ch === 'C' && seeds.filter((x) => x === 'C').length >= 2) continue;
+      const c = (r() * cells.length) | 0;
+      if (cells[c] !== 0) continue;
+      const s = SPECIES.indexOf(ch);
+      const cover = growth(cells, W, H, s, c);
+      if (cover.length < MIN_COVER[ch]) continue;
+      for (const { i } of cover) cells[i] = s + 1;
+      seeds.push(ch);
+      planted.push([s, c]);
+      done = true;
+    }
+    if (!done) return null;
+  }
+  // la tierra es lo que floreció; se recortan filas y columnas vacías
+  const soil = (x, y) => cells[y * W + x] > 0;
+  const xs = [...Array(W).keys()].filter((x) => [...Array(H).keys()].some((y) => soil(x, y)));
+  const ys = [...Array(H).keys()].filter((y) => [...Array(W).keys()].some((x) => soil(x, y)));
+  const x0 = xs[0], x1 = xs[xs.length - 1], y0 = ys[0], y1 = ys[ys.length - 1];
+  if (x1 - x0 < 2 || y1 - y0 < 2) return null;
+  const g = [];
+  for (let y = y0; y <= y1; y++) {
+    let row = '';
+    for (let x = x0; x <= x1; x++) row += soil(x, y) ? 'o' : '.';
+    g.push(row);
+  }
+  // la secuencia con la que se construyó es una solución: se guarda para las pistas
+  const sol = planted.map(([s, c]) => [s, (((c / W) | 0) - y0) * (x1 - x0 + 1) + (c % W) - x0]);
+  const lv = { sol, g, s: seeds.sort((a, b) => SPECIES.indexOf(a) - SPECIES.indexOf(b)).join('') };
+  const p = parseLevel(lv);
+  if (!connected(p.cells, p.w, p.h)) return null;
+
+  // dificultad: fracción de primeros movimientos que no estropean el jardín
+  let good = 0, total = 0;
+  for (let s = 0; s < p.counts.length; s++) {
+    if (!p.counts[s]) continue;
+    for (let c = 0; c < p.cells.length; c++) {
+      if (p.cells[c] !== 0) continue;
+      total++;
+      const cells2 = p.cells.slice(), counts2 = p.counts.slice();
+      for (const { i } of growth(cells2, p.w, p.h, s, c)) cells2[i] = s + 1;
+      counts2[s]--;
+      const r = solve(cells2, p.w, p.h, counts2, 3000);
+      if (r && r.moves) good++;
+    }
+  }
+  if (!good) return null;
+  return { lv, ease: good / total };
 }
 
-const levels = [{ t: 'n', b: [[0, 0, 0, 5], [5, 5, 5, 0], []] }]; // nivel 1: tutorial de 3 movimientos
+const levels = [{ g: ['.o.', 'ooo', '.o.'], s: 'D', sol: [[0, 4]] }]; // nivel 1: una margarita
 for (let n = 2; n <= TOTAL; n++) {
   const sp = spec(n);
-  const r = rng(n * 7919 + 13);
-  const want = sp.type === 'r' ? 4 : 10;
+  const r = rng(n * 7919 + 101);
   const pool = [];
-  for (let tries = 0; pool.length < want && tries < 6000; tries++) {
+  for (let tries = 0; pool.length < 14 && tries < 4000; tries++) {
     const c = candidate(sp, r);
-    if (c) pool.push(c);
+    if (c && !pool.some((q) => q.lv.g.join() === c.lv.g.join())) pool.push(c);
   }
-  if (!pool.length) throw new Error(`Nivel ${n}: no se encontró ningún reparto con solución`);
-  pool.sort((a, b) => a.nodes - b.nodes);
-  const pick = pool[Math.round((pool.length - 1) * (0.15 + 0.7 * sp.pos))];
-  levels.push({ t: sp.type, b: pick.bottles });
-  console.log(`Nivel ${String(n).padStart(3)}  ${sp.type}  ${sp.colors} colores  ${sp.empties} vacías  esfuerzo ${pick.nodes}`);
+  if (!pool.length) throw new Error(`Nivel ${n}: no salió ningún jardín`);
+  pool.sort((a, b) => b.ease - a.ease); // de fácil a difícil
+  const pick = pool[sp.intro ? 0 : Math.round((pool.length - 1) * (0.1 + 0.85 * sp.pos))];
+  levels.push(pick.lv);
+  console.log(`Nivel ${String(n).padStart(2)}  ${pick.lv.s.padEnd(10)}  ${pick.lv.g[0].length}x${pick.lv.g.length}  buenos comienzos ${(pick.ease * 100).toFixed(0)}%`);
 }
 
 const body = levels
-  .map((l) => `  { t: '${l.t}', b: [${l.b.map((b) => `'${b.map((c) => c.toString(PALETTE)).join('')}'`).join(', ')}] },`)
+  .map((l) => `  { s: '${l.s}', g: [${l.g.map((row) => `'${row}'`).join(', ')}], sol: ${JSON.stringify(l.sol)} },`)
   .join('\n');
 writeFileSync(
   new URL('../js/levels.js', import.meta.url),
-  `// GENERADO por tools/gen-levels.mjs — no editar a mano.\n// Cada botella es una cadena de colores (dígitos en base 12) de abajo arriba.\nexport const LEVELS = [\n${body}\n];\n`,
+  `// GENERADO por tools/gen-levels.mjs — no editar a mano.\n// g: jardín ('o' tierra, '.' hueco) · s: semillas\n// sol: una solución, como pares [especie, casilla] en orden.\nexport const LEVELS = [\n${body}\n];\n`,
 );
 console.log(`\n${levels.length} niveles escritos en js/levels.js`);

@@ -1,40 +1,32 @@
-import { CAP, isComplete, isDone, canPour, solve, hasUsefulMove } from './engine.js';
+import { SPECIES, growth, parseLevel, freeCount, solve } from './engine.js';
 import { LEVELS } from './levels.js';
-import { DRINKS, DRINK_EVERY, drinkSVG } from './drinks.js';
+import { FLOWERS, patternSVG, drawFlower } from './flowers.js';
 
-const COLORS = ['#ff6b8b', '#ff9838', '#ffd43b', '#a6d94a', '#33b679', '#35c9d6', '#4a8dff', '#5a55d6', '#c39bff', '#d94bc0', '#a9744f', '#7b2242'];
-const HIDDEN = '#ddd3e8';
-const TYPE_NAME = { n: '', m: 'misterio', r: 'reto' };
-const TIPS = {
-  first: 'Toca una botella y después otra para verter. Deja cada color en su botella.',
-  m: 'Misterio: los colores ocultos se descubren al quedar arriba.',
-  r: 'Reto: solo hay una botella libre.',
-};
-const CHEERS = ['¡Perfecto!', '¡Qué arte!', '¡Brillante!', '¡Chin-chin!', '¡Precioso!', '¡Así se hace!'];
+const CHEERS = ['¡Ha florecido!', '¡Qué jardín!', '¡Precioso!', '¡Primavera!', '¡Así se planta!', '¡Brota todo!'];
+const ORDER_TIP = 'El orden importa: lo que ya ha florecido corta el paso a lo siguiente.';
+const SOIL = '#ead7c2', SOIL_DOT = '#dcc4a9';
 const $ = (id) => document.getElementById(id);
+const idx = (ch) => SPECIES.indexOf(ch);
+// La flor que cada nivel aporta al jardín propio: una de sus semillas.
+const featured = (i) => idx(LEVELS[i].s[(i * 7 + 3) % LEVELS[i].s.length]);
 
 // ---------- Guardado ----------
-const KEY = 'mimosa.v1';
+const KEY = 'brota.v1';
 const save = { done: {}, sound: true };
 try { Object.assign(save, JSON.parse(localStorage.getItem(KEY)) || {}); } catch { /* sin guardado */ }
 const persist = () => { try { localStorage.setItem(KEY, JSON.stringify(save)); } catch { /* modo privado */ } };
-const isDoneLevel = (i) => save.done[i] > 0;
+const isDoneLevel = (i) => !!save.done[i];
 const unlocked = (i) => i === 0 || isDoneLevel(i - 1);
 const doneCount = () => LEVELS.reduce((a, _, i) => a + (isDoneLevel(i) ? 1 : 0), 0);
 const firstPending = () => LEVELS.findIndex((_, i) => !isDoneLevel(i));
-const drinkUnlocked = (d) => isDoneLevel((d + 1) * DRINK_EVERY - 1);
-const drinksCount = () => DRINKS.reduce((a, _, d) => a + (drinkUnlocked(d) ? 1 : 0), 0);
 
 // ---------- Sonido ----------
-let ac = null, noise = null;
+let ac = null;
 function unlockAudio() {
   if (!ac) {
     const AC = window.AudioContext || window.webkitAudioContext;
     if (!AC) return;
     ac = new AC();
-    noise = ac.createBuffer(1, ac.sampleRate, ac.sampleRate);
-    const d = noise.getChannelData(0);
-    for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
   }
   if (ac.state === 'suspended') ac.resume();
 }
@@ -52,28 +44,14 @@ function tone(freq, dur, { type = 'sine', vol = 0.1, to = 0, delay = 0 } = {}) {
   o.start(t);
   o.stop(t + dur + 0.03);
 }
+const SCALE = [523, 587, 659, 784, 880, 1047, 1175, 1319, 1568]; // pentatónica: cualquier combinación suena bien
 const sfx = {
-  pick: () => tone(620, 0.09, { vol: 0.07, to: 880 }),
-  drop: () => tone(520, 0.08, { vol: 0.05, to: 380 }),
-  no: () => tone(190, 0.1, { type: 'triangle', vol: 0.1, to: 150 }),
   tap: () => tone(700, 0.05, { vol: 0.05 }),
-  pour(dur) { // ruido filtrado que sube de tono, como un vaso llenándose
-    if (!ac || !save.sound) return;
-    const t = ac.currentTime;
-    const src = ac.createBufferSource(), f = ac.createBiquadFilter(), g = ac.createGain();
-    src.buffer = noise; src.loop = true;
-    f.type = 'bandpass'; f.Q.value = 2.5;
-    f.frequency.setValueAtTime(500, t);
-    f.frequency.exponentialRampToValueAtTime(1500, t + dur);
-    g.gain.setValueAtTime(0.0001, t);
-    g.gain.exponentialRampToValueAtTime(0.09, t + 0.04);
-    g.gain.setValueAtTime(0.09, t + dur - 0.05);
-    g.gain.exponentialRampToValueAtTime(0.0001, t + dur + 0.04);
-    src.connect(f).connect(g).connect(ac.destination);
-    src.start(t); src.stop(t + dur + 0.06);
-  },
-  done: () => [784, 1047, 1319].forEach((f, i) => tone(f, 0.22, { vol: 0.08, delay: i * 0.06 })),
-  win: () => [523, 659, 784, 1047, 1319].forEach((f, i) => tone(f, 0.36, { vol: 0.09, delay: 0.12 + i * 0.09 })),
+  pick: () => tone(620, 0.08, { vol: 0.06, to: 820 }),
+  no: () => tone(190, 0.1, { type: 'triangle', vol: 0.1, to: 150 }),
+  bloom: (d, delay) => { tone(SCALE[Math.min(d, SCALE.length - 1)], 0.32, { vol: 0.085, delay }); tone(SCALE[Math.min(d, SCALE.length - 1)] * 2, 0.2, { vol: 0.02, delay }); },
+  undo: () => tone(520, 0.12, { vol: 0.06, to: 330 }),
+  win: () => [523, 659, 784, 1047, 1319].forEach((f, i) => tone(f, 0.4, { vol: 0.09, delay: i * 0.09 })),
 };
 
 // ---------- Pantallas ----------
@@ -83,7 +61,7 @@ function show(name) {
   for (const s of document.querySelectorAll('.screen')) s.classList.toggle('active', s.id === name);
   if (name === 'home') renderHome();
   if (name === 'levels') renderLevels();
-  if (name === 'menu') renderMenu();
+  if (name === 'garden') renderGarden();
   if (name === 'game') { resize(); if (!running) { running = true; last = 0; requestAnimationFrame(frame); } }
 }
 
@@ -91,7 +69,7 @@ function renderHome() {
   const pending = firstPending(), n = doneCount();
   $('btn-play').textContent = pending < 0 ? 'Volver a jugar' : n === 0 ? 'Jugar' : `Nivel ${pending + 1}`;
   $('home-bar').style.width = `${(n / LEVELS.length) * 100}%`;
-  $('home-progress').textContent = `${n} de ${LEVELS.length} niveles · ${drinksCount()} de ${DRINKS.length} bebidas`;
+  $('home-progress').textContent = n === 1 ? '1 flor en tu jardín' : `${n} flores en tu jardín`;
   $('btn-sound').textContent = `Sonido: ${save.sound ? 'sí' : 'no'}`;
 }
 
@@ -104,177 +82,195 @@ function renderLevels() {
     const b = document.createElement('button');
     b.className = 'lv' + (isDoneLevel(i) ? ' done' : '') + (i === pending ? ' next' : '');
     b.disabled = !unlocked(i);
-    b.innerHTML = `${i + 1}<small>${TYPE_NAME[lv.t]}</small>`;
+    b.textContent = i + 1;
     b.onclick = () => { sfx.tap(); startLevel(i); };
     list.appendChild(b);
     if (i === pending) requestAnimationFrame(() => b.scrollIntoView({ block: 'center' }));
   });
 }
 
-function renderMenu() {
-  $('menu-count').textContent = `${drinksCount()}/${DRINKS.length}`;
-  $('menu-list').innerHTML = DRINKS.map((d, i) => {
-    const ok = drinkUnlocked(i);
-    return `<div class="drink${ok ? '' : ' locked'}">${drinkSVG(d, !ok)}<strong>${ok ? d.name : '???'}</strong><small>${ok ? 'Conseguida' : `Nivel ${(i + 1) * DRINK_EVERY}`}</small></div>`;
-  }).join('');
+function renderGarden() {
+  $('garden-count').textContent = `${doneCount()}/${LEVELS.length}`;
+  const c = $('garden-cv');
+  const cols = 8, rows = Math.ceil(LEVELS.length / cols);
+  const wCss = c.parentElement.clientWidth - 4, t = wCss / cols;
+  const dpr = Math.min(window.devicePixelRatio || 1, 3);
+  c.style.height = `${t * rows}px`;
+  c.width = Math.round(wCss * dpr); c.height = Math.round(t * rows * dpr);
+  const g = c.getContext('2d');
+  g.setTransform(dpr, 0, 0, dpr, 0, 0);
+  LEVELS.forEach((lv, i) => {
+    const x = (i % cols) * t, y = Math.floor(i / cols) * t, s = featured(i);
+    roundRect(g, x + 2, y + 2, t - 4, t - 4, t * 0.22);
+    g.fillStyle = isDoneLevel(i) ? FLOWERS[s].tint : SOIL;
+    g.fill();
+    if (isDoneLevel(i)) drawFlower(g, s, x + t / 2, y + t / 2, t * 0.34, Math.sin(i * 1.7) * 0.12);
+    else speckles(g, x, y, t, i);
+  });
 }
 
 // ---------- Estado de la partida ----------
 const cv = $('cv');
 const ctx = cv.getContext('2d');
-let cur = 0, bottles = [], hid = [], view = [], sel = -1, moves = 0, history = [], extraUsed = false, won = false;
-let pours = [], particles = [], hint = null;
-let vw = 0, vh = 0, W = 40, UH = 32, H = 150, T = 0, last = 0;
+let cur = 0, gw = 0, gh = 0, cells = new Int8Array(0), counts = [], sel = -1, history = [], won = false;
+let bloomAt = new Float32Array(0), origins = new Set();
+let preview = null, pressing = false, hint = null, particles = [];
+let vw = 0, vh = 0, ts = 50, ox = 0, oy = 0, T = 0, last = 0;
 
 function startLevel(i) {
   cur = i;
-  const lv = LEVELS[i];
+  const p = parseLevel(LEVELS[i]);
+  gw = p.w; gh = p.h; cells = p.cells; counts = p.counts;
+  bloomAt = new Float32Array(cells.length);
+  origins = new Set();
+  history = []; won = false; preview = null; pressing = false; hint = null; particles = [];
+  sel = counts.findIndex((n) => n > 0);
   $('g-title').textContent = `Nivel ${i + 1}`;
-  $('g-tip').textContent = i === 0 ? TIPS.first : TIPS[lv.t] || '';
+  $('g-tip').textContent = levelTip(i);
   $('win').classList.add('hidden');
-  bottles = lv.b.map((s) => [...s].map((ch) => parseInt(ch, 12)));
-  hid = bottles.map((b) => b.map((_, j) => lv.t === 'm' && j < b.length - 1));
-  view = bottles.map(() => ({ x: 0, y: 0, lift: 0, busy: false, nudge: 0, doneT: -9 }));
-  sel = -1; moves = 0; history = []; extraUsed = false; won = false;
-  pours = []; particles = []; hint = null;
+  buildTray();
   updateHud();
   show('game');
   layout();
 }
 
+function levelTip(i) {
+  if (i === 0) return `Toca la tierra para plantar. ${FLOWERS[0].tip}`;
+  if (i === 2) return 'Cubre toda la tierra con las semillas que tienes.';
+  if (i === 7) return ORDER_TIP;
+  const prev = new Set(LEVELS.slice(0, i).flatMap((l) => l.s.split('')));
+  const fresh = [...new Set(LEVELS[i].s.split(''))].find((ch) => !prev.has(ch));
+  return fresh ? FLOWERS[idx(fresh)].tip || FLOWERS[idx('T')].tip : '';
+}
+
+function buildTray() {
+  const tray = $('tray');
+  tray.textContent = '';
+  counts.forEach((n, s) => {
+    if (!n) return;
+    const f = FLOWERS[s];
+    const b = document.createElement('button');
+    b.className = 'seed';
+    b.dataset.s = s;
+    b.style.setProperty('--c', f.color);
+    b.innerHTML = `<i></i><span class="row2"><canvas width="102" height="102"></canvas>${patternSVG(f)}</span>${f.name}`;
+    drawFlower(b.querySelector('canvas').getContext('2d'), s, 51, 51, 38);
+    b.onclick = () => {
+      unlockAudio();
+      if (won || !counts[s]) { sfx.no(); return; }
+      sel = s; hint = null; sfx.pick(); updateHud();
+    };
+    tray.appendChild(b);
+  });
+}
+
 function updateHud() {
-  $('g-moves').textContent = moves ? `${moves}` : '';
+  for (const b of $('tray').children) {
+    const s = +b.dataset.s;
+    b.querySelector('i').textContent = counts[s];
+    b.classList.toggle('sel', s === sel && counts[s] > 0);
+    b.classList.toggle('empty', counts[s] === 0);
+  }
+  const free = freeCount(cells);
+  $('g-left').textContent = free ? `${free} libres` : '';
   $('g-undo').disabled = !history.length || won;
-  $('g-extra').disabled = extraUsed || won;
   $('g-hint').disabled = won;
 }
 
-const units = (i) => bottles[i].map((c, j) => ({ c, hid: hid[i][j], amt: 1 }));
-
-function visibleRun(i) { // cuántas unidades se vierten: las de arriba del mismo color y a la vista
-  const b = bottles[i];
-  if (!b.length) return 0;
-  let n = 1;
-  while (n < b.length && b[b.length - 1 - n] === b[b.length - 1] && !hid[i][b.length - 1 - n]) n++;
-  return n;
-}
-
-function tap(i) {
-  if (won || view[i].busy) return;
-  const b = bottles[i];
-  hint = null;
-  if (sel < 0) {
-    if (!b.length || isComplete(b)) { view[i].nudge = 1; sfx.no(); return; }
-    sel = i; sfx.pick();
-    return;
+function plant(s, c) {
+  history.push({ cells: cells.slice(), counts: counts.slice(), origin: c, s });
+  const cover = growth(cells, gw, gh, s, c);
+  const rings = new Set();
+  for (const { i, d } of cover) {
+    cells[i] = s + 1;
+    bloomAt[i] = T + d * 0.08;
+    rings.add(d);
   }
-  if (sel === i) { sel = -1; sfx.drop(); return; }
-  if (canPour(bottles[sel], b)) { pour(sel, i); return; }
-  if (b.length && !isComplete(b)) { sel = i; sfx.pick(); } else { view[i].nudge = 1; sfx.no(); }
-}
-
-function pour(a, b) {
-  const A = bottles[a], B = bottles[b];
-  const c = A[A.length - 1];
-  const k = Math.min(visibleRun(a), CAP - B.length);
-  history.push({ bottles: bottles.map((x) => x.slice()), hid: hid.map((x) => x.slice()), moves });
-  const fromA = units(a), fromB = units(b);
-  for (let q = 0; q < k; q++) { A.pop(); hid[a].pop(); B.push(c); hid[b].push(false); }
-  if (A.length) hid[a][A.length - 1] = false; // se descubre lo que queda arriba
-  moves++;
-  sel = -1;
-  view[a].busy = view[b].busy = true;
-  pours.push({ a, b, k, c, fromA, fromB, u0: fromA.length, s: view[b].x < vw / 2 ? -1 : 1, t: 0, T1: 0.2, T2: 0.2 + 0.1 * k, T3: 0.2, started: false, landed: false });
-  if (cur === 0 || $('g-tip').textContent.startsWith('No quedan')) $('g-tip').textContent = cur === 0 ? TIPS.first : '';
+  for (const d of rings) sfx.bloom(d, d * 0.08);
+  origins.add(c);
+  counts[s]--;
+  if (!counts[s]) sel = counts.findIndex((n) => n > 0);
+  hint = null;
+  const free = freeCount(cells);
+  const maxD = Math.max(...rings);
+  if (free === 0) win(maxD * 0.08 + 0.45);
+  else if (sel < 0) $('g-tip').textContent = 'Quedan huecos sin flor. Deshaz y prueba otro orden.';
+  else if (cur > 0) $('g-tip').textContent = '';
   updateHud();
 }
 
 function undo() {
   if (won || !history.length) return;
   const h = history.pop();
-  const extra = bottles.length - h.bottles.length; // la botella extra se conserva
-  bottles = h.bottles; hid = h.hid; moves = h.moves;
-  for (let q = 0; q < extra; q++) { bottles.push([]); hid.push([]); }
-  pours = []; sel = -1; hint = null;
-  for (const v of view) { v.busy = false; v.doneT = -9; }
-  updateHud();
-}
-
-function addBottle() {
-  if (extraUsed || won) return;
-  extraUsed = true;
-  bottles.push([]); hid.push([]);
-  view.push({ x: 0, y: 0, lift: 0, busy: false, nudge: 0, doneT: -9 });
-  pours = []; for (const v of view) v.busy = false;
-  layout();
-  const v = view[view.length - 1];
-  sparkle(v.x, v.y + H / 2, '#ff9ab5', 14);
-  sfx.done();
+  cells = h.cells; counts = h.counts;
+  origins.delete(h.origin);
+  if (sel < 0 || !counts[sel]) sel = counts.findIndex((n) => n > 0);
+  hint = null; preview = null;
   $('g-tip').textContent = '';
+  sfx.undo();
   updateHud();
 }
 
 function showHint() {
-  if (won || pours.length) return;
-  const sol = solve(bottles, 30000);
-  if (!sol || !sol.moves.length) { $('g-tip').textContent = 'Desde aquí no veo salida: deshaz o añade una botella.'; sfx.no(); return; }
-  const [from, to] = sol.moves[0];
-  sel = from;
-  hint = { to, t: 0 };
-  sfx.pick();
-}
-
-function landed(p) {
-  view[p.b].busy = false;
-  if (isComplete(bottles[p.b])) {
-    view[p.b].doneT = T;
-    sparkle(view[p.b].x, view[p.b].y + H * 0.3, COLORS[p.c], 16);
-    sfx.done();
-  }
   if (won) return;
-  if (isDone(bottles)) return win();
-  if (!hasUsefulMove(bottles)) $('g-tip').textContent = 'No quedan movimientos: deshaz o añade una botella.';
+  // Si se han seguido los pasos de la solución guardada, se continúa por ella; si no, se busca una.
+  const known = LEVELS[cur].sol;
+  const onTrack = history.every((h, k) => known[k] && known[k][0] === h.s && known[k][1] === h.origin);
+  let m = onTrack && known[history.length] ? { s: known[history.length][0], c: known[history.length][1] } : null;
+  if (!m) {
+    const sol = solve(cells, gw, gh, counts, 45000);
+    if (sol && sol.moves) m = sol.moves[0];
+    else {
+      $('g-tip').textContent = sol ? 'No encuentro pista desde aquí. Reinicia y te guío paso a paso.' : 'Así ya no se puede completar. Deshaz algún paso.';
+      sfx.no();
+      return;
+    }
+  }
+  sel = m.s;
+  hint = { c: m.c, t: 0 };
+  $('g-tip').textContent = `Planta ${FLOWERS[m.s].name.toLowerCase()} donde marca el círculo.`;
+  sfx.pick();
+  updateHud();
 }
 
-function win() {
+function win(delay) {
   won = true;
-  sel = -1; hint = null;
-  const firstTime = !isDoneLevel(cur);
-  save.done[cur] = save.done[cur] ? Math.min(save.done[cur], moves) : moves;
+  const first = !isDoneLevel(cur);
+  save.done[cur] = 1;
   persist();
   updateHud();
-  sfx.win();
-  confetti();
-  const isLast = cur === LEVELS.length - 1;
-  const d = (cur + 1) % DRINK_EVERY === 0 ? DRINKS[(cur + 1) / DRINK_EVERY - 1] : null;
-  $('win-title').textContent = isLast ? '¡Lo has completado!' : CHEERS[cur % CHEERS.length];
-  $('win-text').textContent = isLast ? 'Los 100 niveles superados. Enhorabuena.' : `Nivel ${cur + 1} en ${moves} movimientos`;
-  $('win-drink').classList.toggle('hidden', !(d && firstTime));
-  if (d && firstTime) { $('win-drink-art').innerHTML = drinkSVG(d); $('win-drink-name').textContent = d.name; }
-  $('win-next').textContent = isLast ? 'Inicio' : 'Siguiente';
-  const level = cur;
-  setTimeout(() => { if (won && cur === level && screen === 'game') $('win').classList.remove('hidden'); }, 1100);
+  const level = cur, s = featured(cur), isLast = cur === LEVELS.length - 1;
+  setTimeout(() => {
+    if (cur !== level || screen !== 'game') return;
+    sfx.win();
+    petalRain();
+  }, delay * 1000);
+  setTimeout(() => {
+    if (cur !== level || screen !== 'game' || !won) return;
+    const g = $('win-flower').getContext('2d');
+    g.clearRect(0, 0, 240, 240);
+    drawFlower(g, s, 120, 120, 92);
+    $('win-title').textContent = isLast ? '¡Jardín completo!' : CHEERS[cur % CHEERS.length];
+    $('win-text').textContent = isLast ? 'Has hecho florecer los 80 jardines.'
+      : first ? `Una flor más en tu jardín: ${FLOWERS[s].name.toLowerCase()}.` : `Nivel ${cur + 1} completado.`;
+    $('win-next').textContent = isLast ? 'Ver mi jardín' : 'Siguiente';
+    $('win').classList.remove('hidden');
+  }, (delay + 1.25) * 1000);
 }
 
-// ---------- Partículas ----------
-function sparkle(x, y, color, n) {
-  for (let q = 0; q < n; q++) {
-    const a = Math.random() * Math.PI * 2, v = 30 + Math.random() * 110;
-    particles.push({ x, y, vx: Math.cos(a) * v, vy: Math.sin(a) * v - 40, g: 60, life: 1, decay: 1.5, color, r: 2 + Math.random() * 3, kind: 0 });
-  }
-}
-function confetti() {
-  for (let q = 0; q < 110; q++) {
+function petalRain() {
+  const colors = [...new Set([...cells].filter((v) => v > 0).map((v) => FLOWERS[v - 1].color))].concat('#ffffff');
+  for (let q = 0; q < 90; q++) {
     particles.push({
-      x: Math.random() * vw, y: -20 - Math.random() * vh * 0.4,
-      vx: (Math.random() - 0.5) * 60, vy: 120 + Math.random() * 160, g: 60,
-      life: 1, decay: 0.28, color: COLORS[(Math.random() * 10) | 0], r: 4 + Math.random() * 4,
-      kind: 1, rot: Math.random() * 6, vr: (Math.random() - 0.5) * 10,
+      x: Math.random() * vw, y: -20 - Math.random() * vh * 0.5,
+      vx: (Math.random() - 0.5) * 50, vy: 90 + Math.random() * 130,
+      life: 1, decay: 0.25, color: colors[(Math.random() * colors.length) | 0], r: 4 + Math.random() * 4,
+      rot: Math.random() * 6, vr: (Math.random() - 0.5) * 6, ph: Math.random() * 6,
     });
   }
 }
 
-// ---------- Geometría ----------
+// ---------- Geometría y dibujo ----------
 function resize() {
   const r = $('stage').getBoundingClientRect();
   if (!r.width) return;
@@ -287,199 +283,107 @@ function resize() {
 }
 
 function layout() {
-  const n = bottles.length;
-  if (!n || !vw) return;
-  const rows = n <= 5 ? 1 : 2;
-  const per = Math.ceil(n / rows);
-  W = Math.min((vw / per) * 0.6, 54, vh / (rows === 1 ? 8.4 : 13.6));
-  UH = W * 0.8;
-  H = UH * CAP + W * 0.45;
-  const head = 3.9 * W, gap = 2.1 * W; // aire para la botella que vierte
-  const body = rows * H + (rows - 1) * gap;
-  const top = Math.max(head, (vh - body) / 2 - 0.2 * W); // botellas centradas, con hueco arriba garantizado
-  const step = Math.min(vw / per, W * 2);
-  for (let i = 0; i < n; i++) {
-    const row = Math.floor(i / per);
-    const inRow = row === rows - 1 ? n - per * (rows - 1) : per;
-    view[i].x = vw / 2 + (i - row * per - (inRow - 1) / 2) * step;
-    view[i].y = top + row * (H + gap);
-    view[i].hit = step / 2;
+  if (!gw || !vw) return;
+  ts = Math.floor(Math.min((vw - 8) / gw, (vh - 12) / gh, 68));
+  ox = Math.round((vw - ts * gw) / 2);
+  oy = Math.round((vh - ts * gh) / 2);
+}
+
+function cellAt(px, py) {
+  const x = Math.floor((px - ox) / ts), y = Math.floor((py - oy) / ts);
+  return x < 0 || y < 0 || x >= gw || y >= gh ? -1 : y * gw + x;
+}
+
+function roundRect(g, x, y, w, h, r) {
+  g.beginPath();
+  g.moveTo(x + r, y);
+  g.arcTo(x + w, y, x + w, y + h, r);
+  g.arcTo(x + w, y + h, x, y + h, r);
+  g.arcTo(x, y + h, x, y, r);
+  g.arcTo(x, y, x + w, y, r);
+  g.closePath();
+}
+
+function speckles(g, x, y, t, i) {
+  g.fillStyle = SOIL_DOT;
+  for (let k = 0; k < 3; k++) {
+    const a = Math.sin(i * 12.9898 + k * 78.233) * 43758.5453, b = Math.sin(i * 39.346 + k * 11.135) * 24634.6345;
+    g.beginPath();
+    g.arc(x + t * (0.25 + 0.5 * (a - Math.floor(a))), y + t * (0.25 + 0.5 * (b - Math.floor(b))), t * 0.035, 0, 7);
+    g.fill();
   }
 }
 
-// Ángulo al que el líquido llega justo al borde, según cuánto queda.
-function tilt(u) {
-  const L = u * UH, empty = H - L;
-  if (L < 0.01) return Math.PI * 0.52;
-  return empty <= H / 2 ? Math.atan((2 * empty) / W) : Math.atan((H * H) / (2 * W * L));
-}
-const ease = (x) => x * x * (3 - 2 * x);
-
-function pourPose(p) {
-  const A = view[p.a], B = view[p.b];
-  let kk, u, frac;
-  if (p.t < p.T1) { kk = ease(p.t / p.T1); u = p.u0; frac = 0; }
-  else if (p.t < p.T1 + p.T2) { kk = 1; frac = (p.t - p.T1) / p.T2; u = p.u0 - p.k * frac; }
-  else { kk = 1 - ease(Math.min(1, (p.t - p.T1 - p.T2) / p.T3)); u = p.u0 - p.k; frac = 1; }
-  const th = tilt(u);
-  const cx = B.x, cy = B.y - Math.max(W * 0.9, H * Math.cos(th) + W * 0.35); // punto por el que cae el chorro
-  const tx = cx - Math.cos(th) * p.s * W / 2, ty = cy - Math.sin(th) * W / 2;
-  const hx = A.x, hy = A.y - A.lift;
-  return { px: hx + (tx - hx) * kk, py: hy + (ty - hy) * kk, ang: p.s * th * kk, kk, frac, cx, cy };
-}
-
-// ---------- Dibujo ----------
-function tubePath() {
-  const r = W * 0.46;
-  ctx.beginPath();
-  ctx.moveTo(-W / 2, 0);
-  ctx.lineTo(-W / 2, H - r);
-  ctx.arc(-W / 2 + r, H - r, r, Math.PI, Math.PI / 2, true);
-  ctx.lineTo(W / 2 - r, H);
-  ctx.arc(W / 2 - r, H - r, r, Math.PI / 2, 0, true);
-  ctx.lineTo(W / 2, 0);
-  ctx.closePath();
-}
-
-function rr(x, y, w, h, r) {
-  ctx.beginPath();
-  ctx.moveTo(x + r, y);
-  ctx.arcTo(x + w, y, x + w, y + h, r);
-  ctx.arcTo(x + w, y + h, x, y + h, r);
-  ctx.arcTo(x, y + h, x, y, r);
-  ctx.arcTo(x, y, x + w, y, r);
-  ctx.closePath();
-}
-
-function shade(hex, k) {
-  const n = parseInt(hex.slice(1), 16);
-  const f = (v) => Math.max(0, Math.min(255, Math.round(v * k)));
-  return `rgb(${f(n >> 16)},${f((n >> 8) & 255)},${f(n & 255)})`;
-}
-
-// Dibuja una botella con su líquido. El líquido siempre queda horizontal aunque la botella se incline.
-function drawBottle(px, py, ang, list, kk, s, corkT) {
-  const sin = Math.sin(ang), cos = Math.cos(ang);
-  const total = list.reduce((a, u) => a + u.amt, 0);
-  const yLow = py + Math.max(H * cos + (W / 2) * Math.abs(sin), (W / 2) * Math.abs(sin));
-  const yLip = py + (s * W / 2) * sin;
-  const depth = total * UH + (yLow - yLip - total * UH) * kk;
-
-  ctx.save();
-  ctx.translate(px, py);
-  ctx.rotate(ang);
-  tubePath();
-  ctx.fillStyle = 'rgba(255,255,255,.6)';
-  ctx.fill();
-
-  ctx.save();
-  ctx.clip();
-  ctx.rotate(-ang);
-  ctx.translate(-px, -py);
-  if (total > 0.001) {
-    let acc = 0;
-    for (const u of list) {
-      const y1 = yLow - (acc / total) * depth;
-      acc += u.amt;
-      const y0 = yLow - (acc / total) * depth;
-      ctx.fillStyle = u.hid ? HIDDEN : COLORS[u.c];
-      ctx.fillRect(px - H - W, y0 - 0.5, 2 * (H + W), y1 - y0 + 1);
-    }
-    ctx.fillStyle = 'rgba(255,255,255,.28)';
-    ctx.fillRect(px - H - W, yLow - depth - 0.5, 2 * (H + W), Math.min(3, depth));
-  }
-  ctx.restore();
-
-  // interrogantes de los colores ocultos (solo con la botella quieta)
-  if (kk === 0) {
-    ctx.fillStyle = '#a996bd';
-    ctx.font = `800 ${Math.round(UH * 0.52)}px ui-rounded, -apple-system, sans-serif`;
-    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-    list.forEach((u, j) => { if (u.hid) ctx.fillText('?', 0, H - (j + 0.5) * UH); });
-  }
-
-  // cristal
-  tubePath();
-  ctx.lineWidth = Math.max(2, W * 0.055);
-  ctx.strokeStyle = 'rgba(122,92,142,.5)';
-  ctx.stroke();
-  ctx.strokeStyle = 'rgba(255,255,255,.55)';
-  ctx.lineWidth = W * 0.09; ctx.lineCap = 'round';
-  ctx.beginPath(); ctx.moveTo(-W * 0.27, H * 0.1); ctx.lineTo(-W * 0.27, H * 0.78); ctx.stroke();
-  rr(-W / 2 - W * 0.08, -W * 0.09, W * 1.16, W * 0.18, W * 0.09);
-  ctx.fillStyle = '#fff'; ctx.fill();
-  ctx.lineWidth = Math.max(1.5, W * 0.04); ctx.strokeStyle = 'rgba(122,92,142,.5)'; ctx.stroke();
-
-  // corcho de botella terminada
-  if (corkT >= 0 && list.length) {
-    const k = Math.min(1, corkT * 5), drop = (1 - ease(k)) * W * 0.8;
-    ctx.globalAlpha = k;
-    rr(-W * 0.33, -W * 0.42 - drop, W * 0.66, W * 0.46, W * 0.12);
-    ctx.fillStyle = shade(COLORS[list[0].c], 0.78);
-    ctx.fill();
-    ctx.globalAlpha = 1;
-  }
-  ctx.restore();
-}
+const backOut = (k) => 1 + 2.7 * (k - 1) ** 3 + 1.7 * (k - 1) ** 2;
 
 function draw() {
   ctx.clearRect(0, 0, vw, vh);
-  const pouring = new Map(pours.map((p) => [p.a, p]));
-  const receiving = new Map(pours.filter((p) => !p.landed).map((p) => [p.b, p]));
+  const rad = ts * 0.22, pad = Math.max(1.5, ts * 0.04);
 
-  // sombras
-  ctx.fillStyle = 'rgba(122,92,142,.1)';
-  for (const v of view) {
-    ctx.beginPath(); ctx.ellipse(v.x, v.y + H + W * 0.14, W * 0.52, W * 0.11, 0, 0, 7); ctx.fill();
+  // sombra de las casillas
+  ctx.fillStyle = 'rgba(122,92,142,.13)';
+  for (let i = 0; i < cells.length; i++) {
+    if (cells[i] === -1) continue;
+    roundRect(ctx, ox + (i % gw) * ts + pad, oy + Math.floor(i / gw) * ts + pad + ts * 0.07, ts - pad * 2, ts - pad * 2, rad);
+    ctx.fill();
   }
 
-  view.forEach((v, i) => {
-    if (pouring.has(i)) return;
-    let list = units(i);
-    const p = receiving.get(i);
-    if (p) {
-      const f = p.t < p.T1 ? 0 : Math.min(1, (p.t - p.T1) / p.T2);
-      list = p.fromB.concat(f > 0 ? [{ c: p.c, hid: false, amt: p.k * f }] : []);
+  const inPreview = new Map((preview ? preview.cover : []).map((p) => [p.i, p.d]));
+  const later = [];
+  for (let i = 0; i < cells.length; i++) {
+    const v = cells[i];
+    if (v === -1) continue;
+    const x = ox + (i % gw) * ts, y = oy + Math.floor(i / gw) * ts;
+    roundRect(ctx, x + pad, y + pad, ts - pad * 2, ts - pad * 2, rad);
+    ctx.fillStyle = SOIL;
+    ctx.fill();
+    const k = v > 0 ? Math.min(1, (T - bloomAt[i]) / 0.38) : 0;
+    if (k <= 0) {
+      speckles(ctx, x, y, ts, i);
+      if (inPreview.has(i)) {
+        roundRect(ctx, x + pad, y + pad, ts - pad * 2, ts - pad * 2, rad);
+        ctx.globalAlpha = 0.92; ctx.fillStyle = FLOWERS[sel].tint; ctx.fill();
+        ctx.globalAlpha = 1;
+        if (i !== preview.c) { ctx.fillStyle = FLOWERS[sel].color; ctx.beginPath(); ctx.arc(x + ts / 2, y + ts / 2, ts * 0.09, 0, 7); ctx.fill(); }
+      }
+      continue;
     }
-    const shakeX = v.nudge > 0 ? Math.sin(v.nudge * 18) * W * 0.12 * v.nudge : 0;
-    const complete = !p && isComplete(bottles[i]);
-    drawBottle(v.x + shakeX, v.y - v.lift, 0, list, 0, 1, complete ? (v.doneT < 0 ? 1 : T - v.doneT) : -1);
-  });
+    roundRect(ctx, x + pad, y + pad, ts - pad * 2, ts - pad * 2, rad);
+    ctx.globalAlpha = Math.min(1, k * 2.5);
+    ctx.fillStyle = FLOWERS[v - 1].tint;
+    ctx.fill();
+    ctx.globalAlpha = 1;
+    later.push({ i, x, y, s: v - 1, k });
+  }
 
-  // marca de pista sobre la botella destino
-  if (hint && view[hint.to]) {
-    const v = view[hint.to], b = Math.sin(hint.t * 6) * W * 0.16;
-    ctx.fillStyle = '#ff6b8b';
+  for (const { i, x, y, s, k } of later) {
+    const sway = Math.sin(T * (won ? 3 : 1.5) + i * 1.3) * (won ? 0.2 : 0.07);
+    drawFlower(ctx, s, x + ts / 2, y + ts / 2, ts * (origins.has(i) ? 0.4 : 0.31) * backOut(k), sway);
+  }
+
+  if (preview) {
+    ctx.globalAlpha = 0.75;
+    drawFlower(ctx, sel, ox + (preview.c % gw + 0.5) * ts, oy + (Math.floor(preview.c / gw) + 0.5) * ts, ts * 0.42, 0);
+    ctx.globalAlpha = 1;
+  }
+
+  if (hint) {
+    const a = 0.5 + 0.5 * Math.sin(hint.t * 6);
+    ctx.strokeStyle = FLOWERS[sel >= 0 ? sel : 0].color;
+    ctx.lineWidth = ts * 0.08;
+    ctx.globalAlpha = 0.55 + a * 0.45;
     ctx.beginPath();
-    ctx.moveTo(v.x - W * 0.3, v.y - W * 1.05 + b); ctx.lineTo(v.x + W * 0.3, v.y - W * 1.05 + b); ctx.lineTo(v.x, v.y - W * 0.55 + b);
-    ctx.closePath(); ctx.fill();
-  }
-
-  for (const p of pours) {
-    const pose = pourPose(p);
-    const B = view[p.b];
-    if (p.t >= p.T1 && p.t < p.T1 + p.T2) { // chorro
-      const surface = B.y + H - (p.fromB.length + p.k * pose.frac) * UH;
-      const sw = W * 0.17;
-      ctx.fillStyle = COLORS[p.c];
-      rr(pose.cx - sw / 2, pose.cy - 2, sw, surface - pose.cy + 4, sw / 2);
-      ctx.fill();
-    }
-    const f = p.t < p.T1 ? 0 : Math.min(1, (p.t - p.T1) / p.T2);
-    const list = p.fromA.map((u, j) => (j >= p.fromA.length - p.k ? { ...u, amt: 1 - f } : u));
-    drawBottle(pose.px, pose.py, pose.ang, list, pose.kk, p.s, -1);
+    ctx.arc(ox + (hint.c % gw + 0.5) * ts, oy + (Math.floor(hint.c / gw) + 0.5) * ts, ts * (0.3 + a * 0.06), 0, 7);
+    ctx.stroke();
+    ctx.globalAlpha = 1;
   }
 
   for (const q of particles) {
-    ctx.globalAlpha = Math.max(0, Math.min(1, q.life * 2));
+    ctx.globalAlpha = Math.max(0, Math.min(1, q.life * 3));
     ctx.fillStyle = q.color;
-    if (q.kind === 1) {
-      ctx.save(); ctx.translate(q.x, q.y); ctx.rotate(q.rot);
-      ctx.fillRect(-q.r, -q.r * 0.45, q.r * 2, q.r * 0.9);
-      ctx.restore();
-    } else {
-      ctx.beginPath(); ctx.arc(q.x, q.y, q.r * (0.4 + q.life * 0.6), 0, 7); ctx.fill();
-    }
+    ctx.save(); ctx.translate(q.x, q.y); ctx.rotate(q.rot);
+    ctx.beginPath(); ctx.ellipse(0, 0, q.r, q.r * 0.55, 0, 0, 7); ctx.fill();
+    ctx.restore();
   }
   ctx.globalAlpha = 1;
 }
@@ -487,21 +391,8 @@ function draw() {
 function update(dt) {
   T += dt;
   if (hint) hint.t += dt;
-  view.forEach((v, i) => {
-    const target = i === sel ? UH * 0.6 : 0;
-    v.lift += (target - v.lift) * Math.min(1, dt * 18);
-    v.nudge = Math.max(0, v.nudge - dt * 3);
-  });
-  for (const p of pours) {
-    p.t += dt;
-    if (!p.started && p.t >= p.T1) { p.started = true; sfx.pour(p.T2); }
-    if (!p.landed && p.t >= p.T1 + p.T2) { p.landed = true; landed(p); }
-    if (p.t >= p.T1 + p.T2 + p.T3) { p.finished = true; view[p.a].busy = false; }
-  }
-  pours = pours.filter((p) => !p.finished);
   for (const q of particles) {
-    q.vy += q.g * dt; q.x += q.vx * dt; q.y += q.vy * dt; q.life -= dt * q.decay;
-    if (q.kind === 1) { q.rot += q.vr * dt; q.vx += Math.sin(T * 3 + q.r) * 40 * dt; }
+    q.x += (q.vx + Math.sin(T * 2 + q.ph) * 40) * dt; q.y += q.vy * dt; q.rot += q.vr * dt; q.life -= dt * q.decay;
   }
   particles = particles.filter((q) => q.life > 0 && q.y < vh + 30);
 }
@@ -516,39 +407,53 @@ function frame(t) {
 }
 
 // ---------- Entrada ----------
+// Mantén pulsado y arrastra para ver cómo crecería; al soltar, se planta.
+function setPreview(e) {
+  const r = cv.getBoundingClientRect();
+  const c = cellAt(e.clientX - r.left, e.clientY - r.top);
+  preview = c >= 0 && cells[c] === 0 && sel >= 0 && counts[sel] > 0 ? { c, cover: growth(cells, gw, gh, sel, c) } : null;
+  return c;
+}
 cv.addEventListener('pointerdown', (e) => {
   unlockAudio();
-  const r = cv.getBoundingClientRect();
-  const x = e.clientX - r.left, y = e.clientY - r.top;
-  let best = -1, bd = Infinity;
-  view.forEach((v, i) => {
-    const dx = Math.abs(x - v.x);
-    if (dx <= v.hit && y > v.y - W * 1.2 && y < v.y + H + W * 0.8 && dx < bd) { bd = dx; best = i; }
-  });
-  if (best >= 0) tap(best);
-  else if (sel >= 0 && !won) { sel = -1; hint = null; sfx.drop(); }
+  if (won) return;
+  pressing = true;
+  const c = setPreview(e);
+  if (!preview && c >= 0 && cells[c] === 0) { // tierra libre pero sin semillas
+    sfx.no();
+    for (const b of $('tray').children) { b.classList.remove('shake'); void b.offsetWidth; b.classList.add('shake'); }
+  }
 });
+window.addEventListener('pointermove', (e) => { if (pressing) setPreview(e); });
+window.addEventListener('pointerup', (e) => {
+  if (!pressing) return;
+  pressing = false;
+  setPreview(e);
+  const p = preview;
+  preview = null;
+  if (p && !won) plant(sel, p.c);
+});
+window.addEventListener('pointercancel', () => { pressing = false; preview = null; });
 // iOS: sin zoom por pellizco ni por doble toque
 document.addEventListener('gesturestart', (e) => e.preventDefault());
 document.addEventListener('dblclick', (e) => e.preventDefault());
 document.addEventListener('pointerdown', unlockAudio, { once: true });
-window.addEventListener('resize', resize);
+window.addEventListener('resize', () => { resize(); if (screen === 'garden') renderGarden(); });
 window.addEventListener('orientationchange', () => setTimeout(resize, 200));
 
 // ---------- Botones ----------
-const on = (id, fn) => { $(id).onclick = () => { sfx.tap(); fn(); }; };
+const on = (id, fn) => { $(id).onclick = () => { unlockAudio(); sfx.tap(); fn(); }; };
 on('btn-play', () => { const i = firstPending(); if (i < 0) show('levels'); else startLevel(i); });
 on('btn-levels', () => show('levels'));
-on('btn-menu', () => show('menu'));
+on('btn-garden', () => show('garden'));
 on('btn-sound', () => { save.sound = !save.sound; persist(); renderHome(); sfx.tap(); });
 on('lv-back', () => show('home'));
-on('menu-back', () => show('home'));
+on('garden-back', () => show('home'));
 on('g-back', () => show('home'));
 on('g-undo', undo);
 on('g-restart', () => startLevel(cur));
 on('g-hint', showHint);
-on('g-extra', addBottle);
-on('win-next', () => { if (cur === LEVELS.length - 1) show('home'); else startLevel(cur + 1); });
+on('win-next', () => { if (cur === LEVELS.length - 1) show('garden'); else startLevel(cur + 1); });
 
 // ---------- PWA ----------
 const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
@@ -559,9 +464,9 @@ if ('serviceWorker' in navigator) navigator.serviceWorker.register('./sw.js').ca
 // Solo para las pruebas automáticas (?test).
 if (location.search.includes('test')) {
   window.__test = {
-    state: () => ({ bottles, won, busy: pours.length > 0, sel }),
-    xy: (i) => { const r = cv.getBoundingClientRect(); return [r.left + view[i].x, r.top + view[i].y + H / 2]; },
-    next: () => { const s = solve(bottles, 60000); return s && s.moves[0]; },
+    state: () => ({ won, free: freeCount(cells), sel, counts: counts.slice() }),
+    xy: (c) => { const r = cv.getBoundingClientRect(); return [r.left + ox + (c % gw + 0.5) * ts, r.top + oy + (Math.floor(c / gw) + 0.5) * ts]; },
+    next: () => { const s = solve(cells, gw, gh, counts, 200000); return s && s.moves && s.moves[0]; },
   };
 }
 

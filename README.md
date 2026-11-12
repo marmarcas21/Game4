@@ -1,14 +1,22 @@
-# Mimosa
+# Brota
 
-Puzzle de ordenar colores para iPhone: 100 niveles, de muy fácil a difícil. Es una PWA estática, sin dependencias y sin paso de compilación.
+Puzzle de jardín para iPhone: 80 niveles, de muy fácil a difícil. Es una PWA estática, sin dependencias y sin paso de compilación.
 
-Tocas una botella y luego otra para verter. El nivel termina cuando cada color está en su botella.
+Tienes un trozo de tierra y unas semillas. Cada flor crece a su manera, y hay que cubrir toda la tierra. El orden importa: lo que ya ha florecido corta el paso a lo siguiente.
 
-- **Niveles normales:** de 2 a 12 colores, con dos botellas libres.
-- **Misterio:** solo se ve el color de arriba; el resto se descubre al quedar a la vista.
-- **Reto (cada 10 niveles):** una sola botella libre.
-- **Ayudas:** deshacer, reiniciar, pista y una botella extra por nivel.
-- **Mi carta:** cada 5 niveles superados se consigue una bebida nueva (20 en total).
+| Flor | Cómo crece |
+| --- | --- |
+| Margarita | Su casilla y las cuatro de al lado |
+| Tulipán | Hacia los lados, hasta chocar |
+| Lavanda | Hacia arriba y abajo, hasta chocar |
+| Trébol | Solo su casilla |
+| Rosa | Todo su alrededor |
+| Girasol | En diagonal, hasta chocar |
+| Diente de león | Salta: dos casillas más allá, en cruz |
+
+- **Plantar:** elige una semilla y toca la tierra. Si mantienes pulsado y arrastras, ves cómo crecería antes de soltar.
+- **Ayudas:** deshacer, reiniciar y pista.
+- **Mi jardín:** cada nivel superado planta una flor en un jardín propio.
 
 El progreso se guarda en el propio dispositivo.
 
@@ -20,22 +28,18 @@ npm start
 
 Abre `http://localhost:8080`.
 
-## Publicar e instalar en el iPhone
+## Publicación
 
-1. En GitHub: **Settings → Pages → Source: Deploy from a branch → `main` / `(root)`**.
-2. Abre la URL de Pages en **Safari** del iPhone.
-3. **Compartir → Añadir a pantalla de inicio**.
+La web se sirve con GitHub Pages desde la rama `gh-pages`, en https://marmarcas21.github.io/Game4/. Para publicar un cambio hay que subirlo a `main` y a `gh-pages`, y subir `VERSION` en `sw.js` para que los iPhone renueven la caché.
 
-Una PWA necesita HTTPS; GitHub Pages lo da. Una vez instalada funciona sin conexión.
-
-Al publicar cambios, sube `VERSION` en `sw.js` para que los iPhone renueven la caché.
+Para instalarla: abrir la URL en Safari del iPhone y pulsar **Compartir → Añadir a pantalla de inicio**. Una vez instalada funciona sin conexión.
 
 ## Estructura
 
-- `js/engine.js`: reglas del juego y solucionador. Sin DOM.
-- `js/game.js`: pantallas, dibujo en canvas, animación de vertido, sonido y guardado.
-- `js/levels.js`: los 100 niveles. Generado, no se edita a mano.
-- `js/drinks.js`: las bebidas de la carta y su dibujo.
-- `tools/gen-levels.mjs`: genera los niveles y comprueba que tienen solución (`npm run levels`).
+- `js/engine.js`: reglas de crecimiento y solucionador. Sin DOM.
+- `js/game.js`: pantallas, dibujo en canvas, gestos, sonido y guardado.
+- `js/flowers.js`: las especies y cómo se dibujan.
+- `js/levels.js`: los 80 niveles, cada uno con una solución. Generado, no se edita a mano.
+- `tools/gen-levels.mjs`: genera los niveles (`npm run levels`, tarda unos minutos).
 - `tools/make-icons.cjs`: genera los iconos (necesita Playwright).
 - `sw.js`, `manifest.webmanifest`: parte PWA.
